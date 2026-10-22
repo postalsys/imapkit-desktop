@@ -6,6 +6,11 @@
 // the first icon is the icon of the exe in Explorer
 101 ICON "app.ico"
 
+// New Mail, Mark Read and Mark Unread of the toolbar (24x24 each), and the paperclip of the message list.
+// Magenta is transparent
+201 BITMAP "toolbar.bmp"
+202 BITMAP "paperclip.bmp"
+
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION APP_VERSION_COMMAS,0
 PRODUCTVERSION APP_VERSION_COMMAS,0

@@ -55,7 +55,7 @@ export function sourceDocument(raw) {
  * Reads the header block of a message source, without looking at the body
  *
  * @param {Buffer} raw Message source
- * @return {Object} the decoded From, To, Subject and Date headers (the first of repeated headers)
+ * @return {Object} the decoded From, To, Subject, Date and Content-Type headers (the first of repeated headers)
  */
 function readHeaders(raw) {
     let end = raw.indexOf('\r\n\r\n');
@@ -65,7 +65,7 @@ function readHeaders(raw) {
     // 8-bit headers are UTF-8 in practice
     const headers = libmime.decodeHeaders(raw.subarray(0, end < 0 ? raw.length : end).toString('utf8'));
     const value = key => (headers[key] ? libmime.decodeWords(headers[key][0]) : '');
-    return { from: value('from'), to: value('to'), subject: value('subject'), date: value('date') };
+    return { from: value('from'), to: value('to'), subject: value('subject'), date: value('date'), contentType: value('content-type') };
 }
 
 /**
@@ -96,7 +96,10 @@ export function summarize(message) {
         to: headers.to,
         subject: headers.subject,
         // the date of the message, or when it arrived
-        received: isoDate(headers.date) || isoDate(message.internaldate)
+        received: isoDate(headers.date) || isoDate(message.internaldate),
+        // files are attached in multipart/mixed, the images an HTML message shows are in multipart/related. Read from
+        // the headers alone, the list does not parse every message
+        hasAttachments: /^\s*multipart\/mixed\b/i.test(headers.contentType)
     };
 }
 
@@ -109,13 +112,35 @@ const addressText = value =>
         : '';
 
 /**
- * The attachments the preview lists: everything but the inline images that the HTML shows
+ * @param {Object} attachment An attachment of mailparser
+ * @return {Boolean} true for an image that the HTML of the message shows, rather than an attached file
+ */
+const isEmbedded = attachment => !!(attachment.related || (attachment.contentDisposition === 'inline' && attachment.cid));
+
+/**
+ * The parts the preview lists, the attached files first and then the embedded images
  *
  * @param {Object} parsed A message of mailparser
  * @return {Array} attachments of mailparser
  */
 function listAttachments(parsed) {
-    return (parsed.attachments || []).filter(attachment => attachment.contentDisposition !== 'inline' || !attachment.cid);
+    const attachments = parsed.attachments || [];
+    return attachments.filter(attachment => !isEmbedded(attachment)).concat(attachments.filter(isEmbedded));
+}
+
+/**
+ * A file name of an attachment that is safe to write into a folder: no path, no characters Windows refuses
+ *
+ * @param {String} name File name the sender gave
+ * @param {Number} index Position of the attachment, for a name when there is none
+ * @return {String} file name
+ */
+export function safeFilename(name, index) {
+    const clean = String(name || '')
+        .replace(/^.*[\\/]/, '')
+        .replace(/[<>:"|?*\x00-\x1f]/g, '_')
+        .replace(/^[.\s]+|[.\s]+$/g, '');
+    return clean || 'attachment-' + (index + 1);
 }
 
 /**
@@ -138,10 +163,11 @@ export async function parseMessage(message, remoteImages = false) {
         subject: parsed.subject || '',
         date: parsed.date ? parsed.date.toISOString() : null,
         text: parsed.text || '',
-        attachments: listAttachments(parsed).map(attachment => ({
-            filename: attachment.filename || 'attachment',
+        attachments: listAttachments(parsed).map((attachment, index) => ({
+            filename: safeFilename(attachment.filename, index),
             contentType: attachment.contentType,
-            size: attachment.size
+            size: attachment.size,
+            inline: isEmbedded(attachment)
         })),
         remoteImages: typeof parsed.html === 'string' && REMOTE_IMAGE.test(parsed.html),
         previewHtml: previewDocument(parsed, remoteImages)
@@ -161,6 +187,26 @@ export async function readAttachment(message, index) {
         throw new Error('The message has no attachment ' + index);
     }
     return attachment.content;
+}
+
+/**
+ * Reads every attachment of a message, the embedded images too
+ *
+ * @param {Object} message A message of control.getMessage()
+ * @return {Promise<Array>} `[{ filename, content }]` with safe and unique file names
+ */
+export async function readAttachments(message) {
+    const used = new Set();
+    return listAttachments(await simpleParser(message.raw)).map((attachment, index) => {
+        let filename = safeFilename(attachment.filename, index);
+        const dot = filename.lastIndexOf('.');
+        const [base, ext] = dot > 0 ? [filename.slice(0, dot), filename.slice(dot)] : [filename, ''];
+        for (let n = 2; used.has(filename.toLowerCase()); n++) {
+            filename = base + ' (' + n + ')' + ext;
+        }
+        used.add(filename.toLowerCase());
+        return { filename, content: attachment.content };
+    });
 }
 
 /**

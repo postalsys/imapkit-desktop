@@ -75,6 +75,8 @@ bool PromptDialog(HWND owner, const std::wstring& title, std::vector<PromptField
 std::wstring OpenFileDialog(HWND owner, const wchar_t* title, const wchar_t* filter);
 // the chosen files, several can be selected
 std::vector<std::wstring> OpenFilesDialog(HWND owner, const wchar_t* title, const wchar_t* filter);
+// a folder chosen in the folder dialog, empty when cancelled
+std::wstring FolderDialog(HWND owner, const wchar_t* title);
 std::wstring SaveFileDialog(HWND owner, const wchar_t* title, const wchar_t* filter, const wchar_t* extension, const std::wstring& name);
 void CopyToClipboard(HWND owner, const std::wstring& text);
 // writes text as UTF-8, false on failure

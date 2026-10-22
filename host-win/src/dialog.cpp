@@ -2,6 +2,7 @@
 #include "app.h"
 
 #include <commdlg.h>
+#include <shlobj.h>
 
 #include <fstream>
 
@@ -169,6 +170,21 @@ std::wstring SaveFileDialog(HWND owner, const wchar_t* title, const wchar_t* fil
     OPENFILENAMEW dialog = FileDialog(owner, title, filter, buffer, MAX_PATH, OFN_OVERWRITEPROMPT);
     dialog.lpstrDefExt = extension;
     return GetSaveFileNameW(&dialog) ? buffer : L"";
+}
+
+std::wstring FolderDialog(HWND owner, const wchar_t* title) {
+    BROWSEINFOW browse = {};
+    browse.hwndOwner = owner;
+    browse.lpszTitle = title;
+    browse.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    PIDLIST_ABSOLUTE list = SHBrowseForFolderW(&browse);
+    if (!list) {
+        return {};
+    }
+    wchar_t path[MAX_PATH] = L"";
+    SHGetPathFromIDListW(list, path);
+    CoTaskMemFree(list);
+    return path;
 }
 
 void CopyToClipboard(HWND owner, const std::wstring& text) {

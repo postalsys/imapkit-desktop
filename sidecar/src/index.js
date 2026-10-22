@@ -17,7 +17,7 @@ import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
 import imapkit, { quirks, validateStorage } from 'imapkit';
 import { MailServer } from './mail-server.js';
-import { summarize, parseMessage, sourceDocument, readAttachment, composeMessage } from './messages.js';
+import { summarize, parseMessage, sourceDocument, readAttachment, readAttachments, composeMessage } from './messages.js';
 import { DEFAULT_CONFIG, defaultStorage } from './defaults.js';
 
 const require = createRequire(import.meta.url);
@@ -234,6 +234,21 @@ const methods = {
     saveAttachment: async params => {
         fs.writeFileSync(params.file, await readAttachment(server.control.getMessage(params.path, params.uid), params.index));
         return true;
+    },
+
+    // writes every attachment into a folder, existing files are not replaced. Returns the names written
+    saveAttachments: async params => {
+        const written = [];
+        for (const { filename, content } of await readAttachments(server.control.getMessage(params.path, params.uid))) {
+            let name = filename;
+            for (let n = 2; fs.existsSync(path.join(params.dir, name)); n++) {
+                const dot = filename.lastIndexOf('.');
+                name = dot > 0 ? filename.slice(0, dot) + ' (' + n + ')' + filename.slice(dot) : filename + ' (' + n + ')';
+            }
+            fs.writeFileSync(path.join(params.dir, name), content);
+            written.push(name);
+        }
+        return written;
     },
 
     exportStorage: params => {

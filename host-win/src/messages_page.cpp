@@ -29,6 +29,7 @@ enum ControlId {
     IDM_FLAG = 500,
     IDM_UNFLAG,
     IDM_SAVE_AS,
+    IDM_SAVE_ALL_ATTACHMENTS,
     IDM_NEW_FOLDER,
     IDM_RENAME_FOLDER,
     IDM_DELETE_FOLDER,
@@ -38,6 +39,9 @@ enum ControlId {
 };
 
 constexpr int kMaxAttachmentItems = 100;
+
+// the columns of the message list
+enum Column { kAttachmentColumn, kFlagColumn, kFromColumn, kSubjectColumn, kReceivedColumn, kSizeColumn };
 constexpr UINT_PTR kRefreshTimer = 1;
 // height of a line of the header strip
 const int kHeaderLine = Scale(17);
@@ -56,6 +60,8 @@ struct Summary {
     int uid = 0;
     bool seen = false;
     bool flagged = false;
+    // attached files, not just images that the HTML shows
+    bool attachments = false;
     std::wstring from, subject, received;
     // ISO, sorts like the dates it stands for
     std::string receivedIso;
@@ -93,7 +99,18 @@ protected:
 
         list_ = AddControl(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_SHOWSELALWAYS | LVS_OWNERDATA, IDC_MESSAGES, WS_EX_CLIENTEDGE);
         ListView_SetExtendedListViewStyle(list_, LVS_EX_FULLROWSELECT | LVS_EX_HEADERDRAGDROP);
-        AddColumns(list_, {{L"!", 20}, {L"From", 180}, {L"Subject", 320}, {L"Received", 120}, {L"Size", 70, LVCFMT_RIGHT}});
+        // the paperclip is the image of the first column, as in Outlook Express
+        HIMAGELIST clips = ImageList_Create(16, 16, ILC_COLOR24 | ILC_MASK, 1, 0);
+        HBITMAP paperclip = static_cast<HBITMAP>(LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(202), IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION));
+        ImageList_AddMasked(clips, paperclip, RGB(255, 0, 255));
+        DeleteObject(paperclip);
+        ListView_SetImageList(list_, clips, LVSIL_SMALL);
+        AddColumns(list_, {{L"", 24}, {L"!", 20}, {L"From", 180}, {L"Subject", 320}, {L"Received", 120}, {L"Size", 70, LVCFMT_RIGHT}});
+        LVCOLUMNW clipColumn = {};
+        clipColumn.mask = LVCF_FMT | LVCF_IMAGE;
+        clipColumn.fmt = LVCFMT_LEFT | LVCFMT_IMAGE;
+        clipColumn.iImage = 0;
+        ListView_SetColumn(list_, kAttachmentColumn, &clipColumn);
 
         // the bar of Outlook Express 6 above a message whose pictures it did not download
         infoBar_ = AddControl(L"STATIC",
@@ -192,6 +209,9 @@ protected:
             case IDM_SAVE_AS:
                 SaveSelected();
                 break;
+            case IDM_SAVE_ALL_ATTACHMENTS:
+                SaveAllAttachments();
+                break;
             case IDM_NEW_FOLDER:
                 NewFolder();
                 break;
@@ -257,11 +277,20 @@ protected:
                 Refresh();
                 return 0;
             case WM_SETCURSOR:
-                if (reinterpret_cast<HWND>(wParam) == infoBar_) {
+                if (reinterpret_cast<HWND>(wParam) == infoBar_ || (reinterpret_cast<HWND>(wParam) == hwnd_ && OverAttachments())) {
                     SetCursor(LoadCursorW(nullptr, IDC_HAND));
                     return TRUE;
                 }
                 break;
+            case WM_LBUTTONDOWN: {
+                if (OverAttachments()) {
+                    POINT at = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+                    ClientToScreen(hwnd_, &at);
+                    ShowAttachmentMenu(at);
+                    return 0;
+                }
+                break;
+            }
             case WM_CTLCOLORSTATIC:
                 if (reinterpret_cast<HWND>(lParam) == infoBar_) {
                     // the yellow of a classic tooltip
@@ -320,7 +349,7 @@ private:
             case LVN_COLUMNCLICK: {
                 int column = reinterpret_cast<NMLISTVIEW*>(header)->iSubItem;
                 // a new column sorts ascending, but dates newest first
-                sortAscending_ = column == sortColumn_ ? !sortAscending_ : column != 3;
+                sortAscending_ = column == sortColumn_ ? !sortAscending_ : column != kReceivedColumn;
                 sortColumn_ = column;
                 FillList();
                 return 0;
@@ -352,9 +381,15 @@ private:
                                    0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(IDC_TOOLBAR), GetModuleHandleW(nullptr), nullptr);
         SendMessageW(toolbar_, WM_SETFONT, reinterpret_cast<WPARAM>(UiFont()), TRUE);
         SendMessageW(toolbar_, TB_BUTTONSTRUCTSIZE, sizeof(TBBUTTON), 0);
-        // the large standard images of the common controls, the closest built-in match to the Outlook Express toolbar
-        TBADDBITMAP bitmap = {HINST_COMMCTRL, IDB_STD_LARGE_COLOR};
-        SendMessageW(toolbar_, TB_ADDBITMAP, 0, reinterpret_cast<LPARAM>(&bitmap));
+        // the large standard images of the common controls, the closest built-in match to the Outlook Express toolbar,
+        // and the envelopes of app.rc after them
+        HIMAGELIST images = ImageList_Create(24, 24, ILC_COLOR24 | ILC_MASK, 18, 0);
+        SendMessageW(toolbar_, TB_SETIMAGELIST, 0, reinterpret_cast<LPARAM>(images));
+        SendMessageW(toolbar_, TB_LOADIMAGES, IDB_STD_LARGE_COLOR, reinterpret_cast<LPARAM>(HINST_COMMCTRL));
+        int envelopes = ImageList_GetImageCount(images);
+        HBITMAP strip = static_cast<HBITMAP>(LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(201), IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION));
+        ImageList_AddMasked(images, strip, RGB(255, 0, 255));
+        DeleteObject(strip);
 
         struct ButtonDef {
             int id;
@@ -363,12 +398,12 @@ private:
             BYTE style;
         };
         const ButtonDef defs[] = {
-            {IDC_NEW_MAIL, STD_FILENEW, L"New Mail", BTNS_BUTTON},
+            {IDC_NEW_MAIL, envelopes, L"New Mail", BTNS_BUTTON},
             {IDC_IMPORT, STD_FILEOPEN, L"Import", BTNS_BUTTON},
             {0, 0, nullptr, BTNS_SEP},
             {IDC_DELETE, STD_DELETE, L"Delete", BTNS_BUTTON},
-            {IDC_MARK_READ, STD_PROPERTIES, L"Mark Read", BTNS_BUTTON},
-            {IDC_MARK_UNREAD, STD_UNDO, L"Mark Unread", BTNS_BUTTON},
+            {IDC_MARK_READ, envelopes + 1, L"Mark Read", BTNS_BUTTON},
+            {IDC_MARK_UNREAD, envelopes + 2, L"Mark Unread", BTNS_BUTTON},
             {0, 0, nullptr, BTNS_SEP},
             {IDC_SOURCE, STD_FIND, L"Source", BTNS_CHECK},
             {IDC_REFRESH, STD_REDOW, L"Refresh", BTNS_BUTTON},
@@ -565,6 +600,7 @@ private:
                     summary.receivedIso = JsonString(entry, "received");
                     summary.received = FormatTime(summary.receivedIso);
                     summary.size = entry.value("size", 0.0);
+                    summary.attachments = entry.value("hasAttachments", false);
                     uidIndex_[summary.uid] = messages_.size();
                     messages_.push_back(std::move(summary));
                 }
@@ -575,13 +611,15 @@ private:
 
     bool Before(const Summary& a, const Summary& b) const {
         switch (sortColumn_) {
-            case 0:
+            case kAttachmentColumn:
+                return a.attachments < b.attachments;
+            case kFlagColumn:
                 return a.flagged < b.flagged;
-            case 1:
+            case kFromColumn:
                 return _wcsicmp(a.from.c_str(), b.from.c_str()) < 0;
-            case 2:
+            case kSubjectColumn:
                 return _wcsicmp(a.subject.c_str(), b.subject.c_str()) < 0;
-            case 4:
+            case kSizeColumn:
                 return a.size < b.size;
             default:
                 return a.receivedIso < b.receivedIso;
@@ -624,25 +662,36 @@ private:
 
     void FillMessageItem(LVITEMW& item) {
         const Summary* message = MessageAt(item.iItem);
-        if (!(item.mask & LVIF_TEXT) || !message) {
+        if (!message) {
             return;
         }
-        switch (item.iSubItem) {
-            case 0:
-                wcsncpy_s(item.pszText, item.cchTextMax, message->flagged ? L"!" : L"", _TRUNCATE);
-                break;
-            case 1:
-                wcsncpy_s(item.pszText, item.cchTextMax, message->from.c_str(), _TRUNCATE);
-                break;
-            case 2:
-                wcsncpy_s(item.pszText, item.cchTextMax, message->subject.c_str(), _TRUNCATE);
-                break;
-            case 3:
-                wcsncpy_s(item.pszText, item.cchTextMax, message->received.c_str(), _TRUNCATE);
-                break;
-            default:
-                wcsncpy_s(item.pszText, item.cchTextMax, FormatSize(message->size).c_str(), _TRUNCATE);
+        if ((item.mask & LVIF_IMAGE) && item.iSubItem == kAttachmentColumn) {
+            item.iImage = message->attachments ? 0 : -1;
         }
+        if (!(item.mask & LVIF_TEXT)) {
+            return;
+        }
+        const wchar_t* text = L"";
+        std::wstring size;
+        switch (item.iSubItem) {
+            case kFlagColumn:
+                text = message->flagged ? L"!" : L"";
+                break;
+            case kFromColumn:
+                text = message->from.c_str();
+                break;
+            case kSubjectColumn:
+                text = message->subject.c_str();
+                break;
+            case kReceivedColumn:
+                text = message->received.c_str();
+                break;
+            case kSizeColumn:
+                size = FormatSize(message->size);
+                text = size.c_str();
+                break;
+        }
+        wcsncpy_s(item.pszText, item.cchTextMax, text, _TRUNCATE);
     }
 
     std::vector<int> SelectedUids() {
@@ -699,8 +748,7 @@ private:
             std::wstring cc = JsonText(result, "cc");
             std::wstring files;
             for (const auto& attachment : CurrentAttachments()) {
-                files += (files.empty() ? L"Attachments: " : L", ") + JsonText(attachment, "filename") + L" (" +
-                         FormatSize(attachment.value("size", 0.0)) + L")";
+                files += (files.empty() ? L"" : L", ") + AttachmentText(attachment);
             }
             SetHeader({JsonText(result, "from"), cc.empty() ? to : to + L"; Cc: " + cc, JsonText(result, "subject"), files});
             ShowCurrentDocument();
@@ -764,7 +812,7 @@ private:
         SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
         int labelRight = header_.left + Scale(60);
         int valueLeft = labelRight + Scale(6);
-        const wchar_t* labels[] = {L"From:", L"To:", L"Subject:", L""};
+        const wchar_t* labels[] = {L"From:", L"To:", L"Subject:", headerValues_[3].empty() ? L"" : L"Attach:"};
         for (int i = 0; i < 4; i++) {
             int top = header_.top + Scale(4) + i * kHeaderLine;
             RECT label = {header_.left + Scale(4), top, labelRight, top + kHeaderLine};
@@ -812,13 +860,8 @@ private:
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(menu, MF_POPUP | enabled, reinterpret_cast<UINT_PTR>(move), L"&Move to");
         AppendMenuW(menu, MF_STRING | (count == 1 ? 0 : MF_GRAYED), IDM_SAVE_AS, L"&Save As...");
-        json attachments = CurrentAttachments();
-        if (count == 1 && !attachments.empty()) {
-            HMENU files = CreatePopupMenu();
-            for (size_t i = 0; i < attachments.size() && i < kMaxAttachmentItems; i++) {
-                AppendMenuW(files, MF_STRING, IDM_ATTACHMENT_FIRST + i, JsonText(attachments[i], "filename").c_str());
-            }
-            AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(files), L"Save a&ttachment");
+        if (count == 1 && !CurrentAttachments().empty()) {
+            AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(AttachmentMenu()), L"Save a&ttachment");
         }
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(menu, MF_STRING | enabled, IDC_DELETE, L"&Delete\tDel");
@@ -828,6 +871,50 @@ private:
             ListView_GetItemRect(list_, focused, &anchor, LVIR_LABEL);
         }
         TrackContextMenu(menu, hwnd_, list_, at, anchor);
+    }
+
+    // "name (size)", and "embedded" for an image that the HTML shows
+    static std::wstring AttachmentText(const json& attachment) {
+        return JsonText(attachment, "filename") + L" (" + FormatSize(attachment.value("size", 0.0)) +
+               (attachment.value("inline", false) ? L", embedded)" : L")");
+    }
+
+    // every attachment of the previewed message, embedded images too, and Save All
+    HMENU AttachmentMenu() {
+        HMENU menu = CreatePopupMenu();
+        json attachments = CurrentAttachments();
+        for (size_t i = 0; i < attachments.size() && i < kMaxAttachmentItems; i++) {
+            AppendMenuW(menu, MF_STRING, IDM_ATTACHMENT_FIRST + i, (L"Save " + AttachmentText(attachments[i]) + L"...").c_str());
+        }
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING, IDM_SAVE_ALL_ATTACHMENTS, L"Save &All...");
+        return menu;
+    }
+
+    void ShowAttachmentMenu(POINT at) {
+        HMENU menu = AttachmentMenu();
+        TrackPopupMenu(menu, TPM_RIGHTBUTTON, at.x, at.y, 0, hwnd_, nullptr);
+        DestroyMenu(menu);
+    }
+
+    // the mouse is on the Attach: line of the header strip
+    bool OverAttachments() {
+        if (headerValues_[3].empty()) {
+            return false;
+        }
+        POINT cursor;
+        GetCursorPos(&cursor);
+        ScreenToClient(hwnd_, &cursor);
+        int top = header_.top + Scale(4) + 3 * kHeaderLine;
+        RECT line = {header_.left, top, header_.right, top + kHeaderLine};
+        return PtInRect(&line, cursor) != FALSE;
+    }
+
+    void SaveAllAttachments() {
+        std::wstring dir = FolderDialog(hwnd_, L"Save the attachments to this folder");
+        if (!dir.empty() && selectedUid_) {
+            TheSidecar().Call("saveAttachments", {{"path", current_}, {"uid", selectedUid_}, {"dir", Narrow(dir)}}, ErrorReporter(hwnd_, L"Save attachments"));
+        }
     }
 
     void ShowFolderMenu(POINT at) {
@@ -966,7 +1053,7 @@ private:
     bool foldersDirty_ = false;
     bool rebuilding_ = false;
     bool selectingFolder_ = false;
-    int sortColumn_ = 3;
+    int sortColumn_ = kReceivedColumn;
     bool sortAscending_ = false;
 };
 

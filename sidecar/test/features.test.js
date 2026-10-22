@@ -136,6 +136,12 @@ describe('sidecar features', () => {
         const file = path.join(dataDir, 'notes.txt');
         await sidecar.call('saveAttachment', { path: 'INBOX', uid, index: 0, file });
         assert.strictEqual(fs.readFileSync(file, 'utf8'), 'attached text');
+
+        // every attachment into a folder, without replacing what is there
+        const dir = fs.mkdtempSync(path.join(dataDir, 'all-'));
+        fs.writeFileSync(path.join(dir, 'notes.txt'), 'existing');
+        assert.deepStrictEqual(await sidecar.call('saveAttachments', { path: 'INBOX', uid, dir }), ['notes (2).txt']);
+        assert.strictEqual(fs.readFileSync(path.join(dir, 'notes.txt'), 'utf8'), 'existing');
     });
 
     it('exports and imports the mailboxes', async () => {
