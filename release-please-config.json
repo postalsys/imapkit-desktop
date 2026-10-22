@@ -7,10 +7,23 @@
             "force-tag-creation": true,
             "include-component-in-tag": false,
             "extra-files": [
-                { "type": "json", "path": "sidecar/package.json", "jsonpath": "$.version" },
-                { "type": "json", "path": "sidecar/package-lock.json", "jsonpath": "$.version" },
-                { "type": "json", "path": "sidecar/package-lock.json", "jsonpath": "$.packages[''].version" }
+                {
+                    "type": "json",
+                    "path": "sidecar/package.json",
+                    "jsonpath": "$.version"
+                },
+                {
+                    "type": "json",
+                    "path": "sidecar/package-lock.json",
+                    "jsonpath": "$.version"
+                },
+                {
+                    "type": "json",
+                    "path": "sidecar/package-lock.json",
+                    "jsonpath": "$.packages[''].version"
+                }
             ]
         }
-    }
+    },
+    "bootstrap-sha": "c7468917ebd327227400712bc20d804f7b1c4895"
 }
