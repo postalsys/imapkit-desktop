@@ -155,7 +155,8 @@ void Preview::Show(const std::wstring& html, bool remoteImages) {
 }
 
 void Preview::Clear() {
-    Show(L"<!doctype html><html><body></body></html>");
+    // white like the documents of messages, also when Windows uses dark mode
+    Show(L"<!doctype html><html><head><meta name=\"color-scheme\" content=\"light\"><style>html{background:#fff}</style></head><body></body></html>");
 }
 
 void Preview::SetVisible(bool visible) {

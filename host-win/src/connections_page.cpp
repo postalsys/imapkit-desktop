@@ -1,4 +1,5 @@
-// The Connections page: IMAP and SMTP sessions, and the protocol log of the selected session (or of all of them)
+// The Connections page: the IMAP and SMTP sessions on top, the protocol log of the selected session (or of all of
+// them) below. Each list has its actions in a header row right above it
 #include "app.h"
 
 #include <shlwapi.h>
@@ -11,20 +12,20 @@ namespace {
 enum ControlId {
     IDC_SESSIONS = 300,
     IDC_LOG,
+    IDC_SESSIONS_LABEL,
     IDC_DISCONNECT,
-    IDC_REMOVE_CLOSED,
-    IDC_CLEAR_LOG,
+    IDC_INJECT,
+    IDC_CLEAR_CLOSED,
     IDC_LOG_LABEL,
     IDC_FILTER_LABEL,
     IDC_FILTER,
+    IDC_COPY,
+    IDC_SAVE,
+    IDC_CLEAR_LOG,
     // menu commands
     IDM_COPY = 350,
     IDM_COPY_DATA,
     IDM_SELECT_ALL,
-    IDM_SAVE_LOG,
-    IDM_CLEAR_LOG,
-    IDM_DISCONNECT,
-    IDM_INJECT,
     IDM_COPY_SESSION_LOG,
 };
 
@@ -60,6 +61,12 @@ int LocalSeconds(const std::string& iso) {
     return hours * 3600 + minutes * 60 + seconds;
 }
 
+std::wstring TimeText(int seconds) {
+    wchar_t text[16];
+    swprintf_s(text, L"%02d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60);
+    return text;
+}
+
 class ConnectionsPage : public Page {
 public:
     void OnEvent(const std::string& name, const json& data) override {
@@ -67,37 +74,50 @@ public:
             OnSession(data);
         } else if (name == "trace") {
             OnTrace(data);
+        } else if (name == "status") {
+            UpdateEmptyText(data);
         }
     }
 
 protected:
     void OnCreate() override {
+        sessionsLabel_ = AddControl(L"STATIC", L"Sessions", SS_LEFT | SS_CENTERIMAGE, IDC_SESSIONS_LABEL);
+        SendMessageW(sessionsLabel_, WM_SETFONT, reinterpret_cast<WPARAM>(BoldFont()), TRUE);
+        disconnect_ = AddControl(L"BUTTON", L"&Disconnect", WS_TABSTOP, IDC_DISCONNECT);
+        inject_ = AddControl(L"BUTTON", L"Send &Raw Data...", WS_TABSTOP, IDC_INJECT);
+        clearClosed_ = AddControl(L"BUTTON", L"Clear Cl&osed", WS_TABSTOP, IDC_CLEAR_CLOSED);
+
         sessions_ = AddControl(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS, IDC_SESSIONS,
                                WS_EX_CLIENTEDGE);
         ListView_SetExtendedListViewStyle(sessions_, LVS_EX_FULLROWSELECT);
-        AddColumns(sessions_, {{L"Session", 70},
-                               {L"Protocol", 60},
+        AddColumns(sessions_, {{L"Session", 90},
                                {L"Client", 140},
                                {L"User", 110},
                                {L"State", 110},
                                {L"Mailbox", 120},
                                {L"TLS", 40},
-                               {L"Connected", 110}});
+                               {L"Connected", 70}});
+        // the first row stands for every session, it is the default filter of the log
+        InsertBlankRow(0);
+        ListView_SetItemText(sessions_, 0, 0, const_cast<wchar_t*>(L"All sessions"));
+        ListView_SetItemState(sessions_, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
 
-        disconnect_ = AddControl(L"BUTTON", L"&Disconnect", WS_TABSTOP, IDC_DISCONNECT);
-        removeClosed_ = AddControl(L"BUTTON", L"&Remove closed", WS_TABSTOP, IDC_REMOVE_CLOSED);
-        clearLog_ = AddControl(L"BUTTON", L"&Clear log", WS_TABSTOP, IDC_CLEAR_LOG);
-        logLabel_ = AddControl(L"STATIC", L"Protocol log of all sessions", SS_LEFT | SS_CENTERIMAGE, IDC_LOG_LABEL);
+        logLabel_ = AddControl(L"STATIC", L"Protocol log of all sessions", SS_LEFT | SS_CENTERIMAGE | SS_ENDELLIPSIS, IDC_LOG_LABEL);
+        SendMessageW(logLabel_, WM_SETFONT, reinterpret_cast<WPARAM>(BoldFont()), TRUE);
         filterLabel_ = AddControl(L"STATIC", L"&Filter:", SS_RIGHT | SS_CENTERIMAGE, IDC_FILTER_LABEL);
         filter_ = AddControl(L"EDIT", L"", WS_TABSTOP | ES_AUTOHSCROLL, IDC_FILTER, WS_EX_CLIENTEDGE);
+        copy_ = AddControl(L"BUTTON", L"&Copy", WS_TABSTOP, IDC_COPY);
+        save_ = AddControl(L"BUTTON", L"&Save...", WS_TABSTOP, IDC_SAVE);
+        clearLog_ = AddControl(L"BUTTON", L"C&lear", WS_TABSTOP, IDC_CLEAR_LOG);
 
         log_ = AddControl(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS, IDC_LOG, WS_EX_CLIENTEDGE);
         ListView_SetExtendedListViewStyle(log_, LVS_EX_FULLROWSELECT);
         SendMessageW(log_, WM_SETFONT, reinterpret_cast<WPARAM>(MonoFont()), TRUE);
         AddColumns(log_, {{L"Time", 70}, {L"Session", 70}, {L"", 30}, {L"Data", 900}});
-        EnableWindow(disconnect_, FALSE);
+        UpdateEmptyText(json::object());
+        UpdateButtons();
 
-        splitters_.push_back({false, {}, [this](int y) { listHeight_ = std::max(Scale(60), y - Scale(6)); }});
+        splitters_.push_back({false, {}, [this](int y) { listHeight_ = y - listTop_; }});
     }
 
     void OnSize(int width, int height) override {
@@ -106,23 +126,38 @@ protected:
             return;
         }
         int pad = Scale(6);
+        int bar = Scale(25);
+        int button = Scale(110);
+
+        // sessions: a header row with its actions, then the list
+        int y = pad;
+        MoveWindow(sessionsLabel_, pad, y, Scale(200), bar, TRUE);
+        MoveWindow(clearClosed_, width - pad - button, y, button, bar, TRUE);
+        MoveWindow(inject_, width - 2 * (pad + button), y, button, bar, TRUE);
+        MoveWindow(disconnect_, width - 3 * (pad + button), y, button, bar, TRUE);
+        y += bar + pad;
+        listTop_ = y;
         if (listHeight_ == 0) {
-            listHeight_ = (height - 2 * pad) * 35 / 100;
+            listHeight_ = (height - y) * 30 / 100;
         }
-        listHeight_ = std::clamp(listHeight_, Scale(60), std::max(Scale(60), height - Scale(160)));
-        MoveWindow(sessions_, pad, pad, width - 2 * pad, listHeight_, TRUE);
-        int y = pad + listHeight_ + pad;
-        splitters_[0].area = {0, pad + listHeight_, width, y};
-        int buttonWidth = Scale(100);
-        MoveWindow(disconnect_, pad, y, buttonWidth, Scale(24), TRUE);
-        MoveWindow(removeClosed_, pad + buttonWidth + pad, y, buttonWidth, Scale(24), TRUE);
-        MoveWindow(clearLog_, pad + 2 * (buttonWidth + pad), y, buttonWidth, Scale(24), TRUE);
-        int filterWidth = Scale(200);
-        int labelLeft = pad + 3 * (buttonWidth + pad) + pad;
-        MoveWindow(filter_, width - pad - filterWidth, y + Scale(1), filterWidth, Scale(22), TRUE);
-        MoveWindow(filterLabel_, width - pad - filterWidth - Scale(50), y, Scale(46), Scale(24), TRUE);
-        MoveWindow(logLabel_, labelLeft, y, width - labelLeft - filterWidth - Scale(60), Scale(24), TRUE);
-        y += Scale(24) + pad;
+        listHeight_ = std::clamp(listHeight_, Scale(60), std::max(Scale(60), height - y - Scale(160)));
+        MoveWindow(sessions_, pad, y, width - 2 * pad, listHeight_, TRUE);
+        y += listHeight_;
+        splitters_[0].area = {0, y, width, y + 2 * pad};
+        y += 2 * pad;
+
+        // log: a header row with the filter and its actions, then the log
+        int narrow = Scale(70);
+        int filterWidth = Scale(180);
+        int right = width - pad;
+        MoveWindow(clearLog_, right - narrow, y, narrow, bar, TRUE);
+        MoveWindow(save_, right - 2 * narrow - pad, y, narrow, bar, TRUE);
+        MoveWindow(copy_, right - 3 * narrow - 2 * pad, y, narrow, bar, TRUE);
+        int filterRight = right - 3 * narrow - 4 * pad;
+        MoveWindow(filter_, filterRight - filterWidth, y + Scale(2), filterWidth, Scale(21), TRUE);
+        MoveWindow(filterLabel_, filterRight - filterWidth - Scale(46), y, Scale(42), bar, TRUE);
+        MoveWindow(logLabel_, pad, y, std::max(0, filterRight - filterWidth - Scale(56) - pad), bar, TRUE);
+        y += bar + pad;
         MoveWindow(log_, pad, y, width - 2 * pad, height - y - pad, TRUE);
     }
 
@@ -133,19 +168,24 @@ protected:
         }
         switch (id) {
             case IDC_DISCONNECT:
-            case IDM_DISCONNECT:
                 if (!sessionFilter_.empty()) {
                     TheSidecar().Call("disconnect", {{"id", sessionFilter_}});
                 }
                 break;
-            case IDC_REMOVE_CLOSED:
+            case IDC_INJECT:
+                Inject();
+                break;
+            case IDC_CLEAR_CLOSED:
                 std::erase_if(rows_, [](const SessionRow& row) { return row.closed; });
                 RebuildSessions();
                 break;
             case IDC_CLEAR_LOG:
-            case IDM_CLEAR_LOG:
                 lines_.clear();
                 RebuildLog();
+                break;
+            case IDC_COPY:
+                // the selected lines, or every line shown
+                CopyToClipboard(hwnd_, LogText(ListView_GetSelectedCount(log_) ? SelectedRows() : AllRows(), true));
                 break;
             case IDM_COPY:
             case IDM_COPY_DATA:
@@ -154,14 +194,11 @@ protected:
             case IDM_SELECT_ALL:
                 ListView_SetItemState(log_, -1, LVIS_SELECTED, LVIS_SELECTED);
                 break;
-            case IDM_SAVE_LOG:
+            case IDC_SAVE:
                 SaveLog();
                 break;
             case IDM_COPY_SESSION_LOG:
                 CopyToClipboard(hwnd_, LogText(AllRows(), true));
-                break;
-            case IDM_INJECT:
-                Inject();
                 break;
         }
     }
@@ -198,11 +235,31 @@ protected:
                 }
             }
         }
-        if (header->hwndFrom == sessions_ && header->code == LVN_ITEMCHANGED) {
-            auto* change = reinterpret_cast<NMLISTVIEW*>(header);
-            if ((change->uChanged & LVIF_STATE) && ((change->uNewState ^ change->uOldState) & LVIS_SELECTED)) {
-                int selected = ListView_GetNextItem(sessions_, -1, LVNI_SELECTED);
-                SetSessionFilter(selected >= 0 && selected < static_cast<int>(rows_.size()) ? rows_[selected].id : "");
+        if (header->hwndFrom == sessions_) {
+            if (header->code == NM_CUSTOMDRAW) {
+                auto* draw = reinterpret_cast<NMLVCUSTOMDRAW*>(header);
+                if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) {
+                    return CDRF_NOTIFYITEMDRAW;
+                }
+                if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
+                    int row = static_cast<int>(draw->nmcd.dwItemSpec);
+                    if (row == 0) {
+                        SelectObject(draw->nmcd.hdc, BoldFont());
+                        return CDRF_NEWFONT;
+                    }
+                    // closed sessions stay for their log, grayed out
+                    if (row - 1 < static_cast<int>(rows_.size()) && rows_[row - 1].closed) {
+                        draw->clrText = GetSysColor(COLOR_GRAYTEXT);
+                    }
+                }
+                return CDRF_DODEFAULT;
+            }
+            if (header->code == LVN_ITEMCHANGED) {
+                auto* change = reinterpret_cast<NMLISTVIEW*>(header);
+                if ((change->uChanged & LVIF_STATE) && ((change->uNewState ^ change->uOldState) & LVIS_SELECTED)) {
+                    const SessionRow* row = RowAt(ListView_GetNextItem(sessions_, -1, LVNI_SELECTED));
+                    SetSessionFilter(row ? row->id : "");
+                }
             }
         }
         return 0;
@@ -236,6 +293,9 @@ protected:
     }
 
 private:
+    // the session of a row of the session list, the first row is All sessions
+    const SessionRow* RowAt(int row) const { return row >= 1 && row - 1 < static_cast<int>(rows_.size()) ? &rows_[row - 1] : nullptr; }
+
     // the focused row of a list, where a menu opened with the menu key goes
     static RECT FocusedRect(HWND list) {
         RECT item = {};
@@ -250,11 +310,11 @@ private:
         bool selected = ListView_GetSelectedCount(log_) > 0;
         HMENU menu = CreatePopupMenu();
         AppendMenuW(menu, MF_STRING | (selected ? 0 : MF_GRAYED), IDM_COPY, L"&Copy\tCtrl+C");
-        AppendMenuW(menu, MF_STRING | (selected ? 0 : MF_GRAYED), IDM_COPY_DATA, L"Copy &data only");
-        AppendMenuW(menu, MF_STRING, IDM_SELECT_ALL, L"Select &all\tCtrl+A");
+        AppendMenuW(menu, MF_STRING | (selected ? 0 : MF_GRAYED), IDM_COPY_DATA, L"Copy &Data Only");
+        AppendMenuW(menu, MF_STRING, IDM_SELECT_ALL, L"Select &All\tCtrl+A");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(menu, MF_STRING | (visible_.empty() ? MF_GRAYED : 0), IDM_SAVE_LOG, L"&Save log as...");
-        AppendMenuW(menu, MF_STRING, IDM_CLEAR_LOG, L"C&lear log");
+        AppendMenuW(menu, MF_STRING | (visible_.empty() ? MF_GRAYED : 0), IDC_SAVE, L"&Save Log...");
+        AppendMenuW(menu, MF_STRING, IDC_CLEAR_LOG, L"C&lear Log");
         TrackContextMenu(menu, hwnd_, log_, at, FocusedRect(log_));
     }
 
@@ -263,10 +323,10 @@ private:
         bool open = row && !row->closed;
         bool imap = row && row->info.value("kind", "") == "imap";
         HMENU menu = CreatePopupMenu();
-        AppendMenuW(menu, MF_STRING | (open ? 0 : MF_GRAYED), IDM_DISCONNECT, L"&Disconnect");
-        AppendMenuW(menu, MF_STRING | (open && imap ? 0 : MF_GRAYED), IDM_INJECT, L"Send &raw data...");
+        AppendMenuW(menu, MF_STRING | (open ? 0 : MF_GRAYED), IDC_DISCONNECT, L"&Disconnect");
+        AppendMenuW(menu, MF_STRING | (open && imap ? 0 : MF_GRAYED), IDC_INJECT, L"Send &Raw Data...");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(menu, MF_STRING | (row ? 0 : MF_GRAYED), IDM_COPY_SESSION_LOG, L"&Copy session log");
+        AppendMenuW(menu, MF_STRING | (visible_.empty() ? MF_GRAYED : 0), IDM_COPY_SESSION_LOG, L"&Copy Log");
         TrackContextMenu(menu, hwnd_, sessions_, at, FocusedRect(sessions_));
     }
 
@@ -275,9 +335,32 @@ private:
         return found == rows_.end() ? nullptr : &*found;
     }
 
-    void UpdateDisconnect() {
+    // the session actions apply to the selected session, Send Raw Data to IMAP sessions only
+    void UpdateButtons() {
         const SessionRow* row = SelectedSession();
-        EnableWindow(disconnect_, row && !row->closed);
+        bool open = row && !row->closed;
+        EnableWindow(disconnect_, open);
+        EnableWindow(inject_, open && row->info.value("kind", "") == "imap");
+        EnableWindow(clearClosed_, std::any_of(rows_.begin(), rows_.end(), [](const SessionRow& entry) { return entry.closed; }));
+    }
+
+    // what to do while the log is empty: connect a client to the server
+    void UpdateEmptyText(const json& status) {
+        std::wstring text = L"No traffic yet.";
+        if (status.value("running", false)) {
+            std::wstring host = JsonText(status, "host");
+            if (host == L"127.0.0.1" || host == L"0.0.0.0") {
+                host = L"localhost";
+            }
+            text += L" Point an email client to " + host + L", IMAP port " + std::to_wstring(status.value("imapPort", 0));
+            if (status.value("smtpPort", 0)) {
+                text += L" or SMTP port " + std::to_wstring(status.value("smtpPort", 0));
+            }
+            text += L". The Server page has the complete client settings.";
+        } else if (status.contains("running")) {
+            text += L" The server is stopped, start it on the Server page.";
+        }
+        SetEmptyText(log_, text);
     }
 
     // writes output to the selected IMAP session as it is, e.g. an ALERT between commands
@@ -304,12 +387,6 @@ private:
             rows[i] = static_cast<int>(i);
         }
         return rows;
-    }
-
-    static std::wstring TimeText(int seconds) {
-        wchar_t text[16];
-        swprintf_s(text, L"%02d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60);
-        return text;
     }
 
     // the rows as text: "time session C: data" per line, or the protocol data alone
@@ -351,11 +428,12 @@ private:
         row->info = data;
         row->closed = JsonString(data, "type") == "close";
         int index = static_cast<int>(row - rows_.begin());
-        if (index >= ListView_GetItemCount(sessions_)) {
-            InsertBlankRow(index);
+        if (index + 1 >= ListView_GetItemCount(sessions_)) {
+            InsertBlankRow(index + 1);
         }
         UpdateSessionRow(index);
         UpdateSessionCount();
+        UpdateButtons();
     }
 
     void UpdateSessionRow(int index) {
@@ -363,28 +441,28 @@ private:
         const json& info = row.info;
         std::wstring kind = JsonText(info, "kind");
         std::transform(kind.begin(), kind.end(), kind.begin(), towupper);
-        std::wstring texts[] = {std::to_wstring(info.value("number", 0)),
-                                kind,
+        std::wstring texts[] = {kind + L" " + std::to_wstring(info.value("number", 0)),
                                 JsonText(info, "remoteAddress"),
                                 JsonText(info, "user"),
                                 row.closed ? L"Closed" : JsonText(info, "state"),
                                 JsonText(info, "mailbox"),
                                 info.value("secure", false) ? L"Yes" : L"No",
-                                FormatTime(JsonString(info, "started"))};
-        for (int column = 0; column < 8; column++) {
-            ListView_SetItemText(sessions_, index, column, texts[column].data());
-        }
-        if (row.id == sessionFilter_) {
-            UpdateDisconnect();
+                                FormatTime(JsonString(info, "started"), true)};
+        for (int column = 0; column < 7; column++) {
+            ListView_SetItemText(sessions_, index + 1, column, texts[column].data());
         }
     }
 
     void RebuildSessions() {
-        ListView_DeleteAllItems(sessions_);
+        // everything but the All sessions row
+        while (ListView_GetItemCount(sessions_) > 1) {
+            ListView_DeleteItem(sessions_, 1);
+        }
         for (int i = 0; i < static_cast<int>(rows_.size()); i++) {
-            InsertBlankRow(i);
+            InsertBlankRow(i + 1);
             UpdateSessionRow(i);
         }
+        ListView_SetItemState(sessions_, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
         SetSessionFilter("");
         UpdateSessionCount();
     }
@@ -392,6 +470,7 @@ private:
     void UpdateSessionCount() {
         auto open = std::count_if(rows_.begin(), rows_.end(), [](const SessionRow& row) { return !row.closed; });
         SetStatus(STATUS_SESSIONS, L"Connected sessions: " + std::to_wstring(open));
+        SetWindowTextW(sessionsLabel_, (L"Sessions (" + std::to_wstring(open) + L" connected)").c_str());
     }
 
     bool Matches(const LogLine& line) {
@@ -447,9 +526,9 @@ private:
     void SetSessionFilter(const std::string& id) {
         sessionFilter_ = id;
         sessionFilterWide_ = Widen(id);
-        std::wstring label = id.empty() ? L"Protocol log of all sessions" : L"Protocol log of session " + Widen(id);
+        std::wstring label = id.empty() ? L"Protocol log of all sessions" : L"Protocol log of " + Widen(id);
         SetWindowTextW(logLabel_, label.c_str());
-        UpdateDisconnect();
+        UpdateButtons();
         RebuildLog();
     }
 
@@ -476,7 +555,7 @@ private:
         const LogLine& line = lines_[visible_[item.iItem]];
         switch (item.iSubItem) {
             case 0:
-                swprintf_s(item.pszText, item.cchTextMax, L"%02d:%02d:%02d", line.time / 3600, line.time / 60 % 60, line.time % 60);
+                wcsncpy_s(item.pszText, item.cchTextMax, TimeText(line.time).c_str(), _TRUNCATE);
                 break;
             case 1:
                 wcsncpy_s(item.pszText, item.cchTextMax, line.session.c_str(), _TRUNCATE);
@@ -489,9 +568,9 @@ private:
         }
     }
 
-    HWND sessions_ = nullptr, log_ = nullptr, filter_ = nullptr, filterLabel_ = nullptr;
-    HWND disconnect_ = nullptr, removeClosed_ = nullptr, clearLog_ = nullptr, logLabel_ = nullptr;
-    int listHeight_ = 0;
+    HWND sessionsLabel_ = nullptr, disconnect_ = nullptr, inject_ = nullptr, clearClosed_ = nullptr, sessions_ = nullptr;
+    HWND logLabel_ = nullptr, filterLabel_ = nullptr, filter_ = nullptr, copy_ = nullptr, save_ = nullptr, clearLog_ = nullptr, log_ = nullptr;
+    int listHeight_ = 0, listTop_ = 0;
     bool logTimer_ = false;
     std::vector<SessionRow> rows_;
     std::deque<LogLine> lines_;

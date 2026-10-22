@@ -111,6 +111,7 @@ protected:
         // the first column has the paperclip of Outlook Express, drawn in the rows and in the header
         AddColumns(list_, {{L"", 22}, {L"!", 20}, {L"From", 180}, {L"Subject", 320}, {L"Received", 120}, {L"Size", 70, LVCFMT_RIGHT}});
         listProc_ = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(list_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(ListProc)));
+        SetEmptyText(list_, L"There are no messages in this folder.");
 
         // the bar of Outlook Express 6 above a message whose pictures it did not download
         infoBar_ = AddControl(L"STATIC",

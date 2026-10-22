@@ -61,6 +61,17 @@ describe('sidecar features', () => {
         assert.ok(hello.quirks.some(quirk => quirk.name === 'm365-throttle' && quirk.description));
     });
 
+    it('lists Inbox first, then the special folders, then the rest by name', async () => {
+        await sidecar.call('createMailbox', { name: 'zeta' });
+        await sidecar.call('createMailbox', { name: 'Alpha' });
+        await sidecar.call('createMailbox', { parent: 'Alpha', name: 'Child' });
+        const paths = (await sidecar.call('mailboxes')).map(folder => folder.path);
+        assert.deepStrictEqual(paths, ['INBOX', 'Drafts', 'Sent', 'Junk', 'Trash', 'Alpha', 'Alpha/Child', 'zeta']);
+        for (const path of ['Alpha/Child', 'Alpha', 'zeta']) {
+            await sidecar.call('deleteMailbox', { path });
+        }
+    });
+
     it('creates, renames and deletes folders', async () => {
         await sidecar.call('createMailbox', { parent: 'INBOX', name: 'Projects' });
         await sidecar.call('createMailbox', { parent: 'Projects', name: 'Old' });

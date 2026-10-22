@@ -24,7 +24,12 @@ enum MenuId {
     IDM_VIEW_CONNECTIONS,
     IDM_VIEW_MESSAGES,
     IDM_ABOUT,
+    IDM_IMPORT_MAILBOXES,
+    IDM_EXPORT_MAILBOXES,
+    IDM_RESET_MAILBOXES,
 };
+
+const wchar_t* kJsonFilter = L"JSON files (*.json)\0*.json\0All files (*.*)\0*.*\0";
 
 const wchar_t* kMainClass = L"ImapKitDesktopMain";
 const wchar_t* kTitle = L"ImapKit Desktop";
@@ -72,6 +77,10 @@ void Layout() {
 
 HMENU BuildMenu() {
     HMENU file = CreatePopupMenu();
+    AppendMenuW(file, MF_STRING, IDM_IMPORT_MAILBOXES, L"&Import Mailboxes...");
+    AppendMenuW(file, MF_STRING, IDM_EXPORT_MAILBOXES, L"&Export Mailboxes...");
+    AppendMenuW(file, MF_STRING, IDM_RESET_MAILBOXES, L"&Reset Mailboxes...");
+    AppendMenuW(file, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(file, MF_STRING, IDM_EXIT, L"E&xit");
     HMENU view = CreatePopupMenu();
     AppendMenuW(view, MF_STRING, IDM_VIEW_SERVER, L"&Server\tCtrl+1");
@@ -165,6 +174,27 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             switch (LOWORD(wParam)) {
                 case IDM_EXIT:
                     SendMessageW(hwnd, WM_CLOSE, 0, 0);
+                    break;
+                case IDM_IMPORT_MAILBOXES: {
+                    std::wstring file = OpenFileDialog(hwnd, L"Import mailboxes", kJsonFilter);
+                    if (!file.empty() && MessageBoxW(hwnd, L"Replace every mailbox with the ones in the file? Connected clients are disconnected.",
+                                                     L"Import Mailboxes", MB_ICONWARNING | MB_OKCANCEL) == IDOK) {
+                        TheSidecar().Call("importStorage", {{"file", Narrow(file)}}, ErrorReporter(hwnd, L"Import"));
+                    }
+                    break;
+                }
+                case IDM_EXPORT_MAILBOXES: {
+                    std::wstring file = SaveFileDialog(hwnd, L"Export mailboxes", kJsonFilter, L"json", L"mailboxes");
+                    if (!file.empty()) {
+                        TheSidecar().Call("exportStorage", {{"file", Narrow(file)}}, ErrorReporter(hwnd, L"Export"));
+                    }
+                    break;
+                }
+                case IDM_RESET_MAILBOXES:
+                    if (MessageBoxW(hwnd, L"Remove every message and folder and start over with the default mailboxes?", L"Reset Mailboxes",
+                                    MB_ICONWARNING | MB_OKCANCEL) == IDOK) {
+                        TheSidecar().Call("reset", json::object(), ErrorReporter(hwnd, L"Reset"));
+                    }
                     break;
                 case IDM_VIEW_SERVER:
                 case IDM_VIEW_CONNECTIONS:

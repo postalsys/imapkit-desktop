@@ -132,6 +132,46 @@ function folderInfo(mailbox) {
     };
 }
 
+// the order of the special folders, the way mail clients list them: Inbox first, then the folders of the mail
+// workflow, the rest alphabetically after them
+const FOLDER_ORDER = ['\\Drafts', '\\Templates', '\\Sent', '\\Archive', '\\Junk', '\\Trash', '\\All', '\\Flagged', '\\Important'];
+
+/**
+ * Orders folders for the folder tree: at every level Inbox, then the special folders, then the rest by name.
+ * Subfolders come right after their parent
+ *
+ * @param {Array} folders Folders of folderInfo()
+ * @return {Array} folders
+ */
+function sortFolders(folders) {
+    const rank = folder => {
+        if (folder.path === 'INBOX') {
+            return -1;
+        }
+        const index = FOLDER_ORDER.indexOf(folder.specialUse);
+        return index < 0 ? FOLDER_ORDER.length : index;
+    };
+    const byParent = new Map();
+    for (const folder of folders) {
+        const siblings = byParent.get(folder.parent) || [];
+        siblings.push(folder);
+        byParent.set(folder.parent, siblings);
+    }
+    const sorted = [];
+    const visit = parent => {
+        const siblings = (byParent.get(parent) || []).sort(
+            (a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })
+        );
+        for (const folder of siblings) {
+            sorted.push(folder);
+            visit(folder.path);
+        }
+    };
+    visit(null);
+    // folders whose parent is not listed (a \\Noselect level that LIST left out) go at the end, nothing is lost
+    return sorted.concat(folders.filter(folder => !sorted.includes(folder)));
+}
+
 /**
  * The path of a new folder: top level without a parent, and next to INBOX for INBOX, which holds no folders here
  *
@@ -147,7 +187,7 @@ function childPath(parent, name) {
 }
 
 const methods = {
-    hello: () => ({ version: VERSION, dataDir, config: server.config, plugins: PLUGINS, quirks: QUIRKS, status: server.status() }),
+    hello: () => ({ version: VERSION, dataDir, config: server.config, defaults: DEFAULT_CONFIG, plugins: PLUGINS, quirks: QUIRKS, status: server.status() }),
 
     getConfig: () => server.config,
 
@@ -178,7 +218,7 @@ const methods = {
         return true;
     },
 
-    mailboxes: () => server.control.listMailboxes().map(folderInfo),
+    mailboxes: () => sortFolders(server.control.listMailboxes().map(folderInfo)),
 
     createMailbox: params => server.control.createMailbox(params.path || childPath(params.parent, params.name), { subscribed: true }),
 

@@ -167,6 +167,64 @@ void TrackContextMenu(HMENU menu, HWND owner, HWND control, POINT at, RECT ancho
     DestroyMenu(menu);
 }
 
+namespace {
+
+struct EmptyText {
+    WNDPROC proc;
+    std::wstring text;
+};
+std::map<HWND, EmptyText> g_emptyTexts;
+
+LRESULT CALLBACK EmptyTextProc(HWND list, UINT message, WPARAM wParam, LPARAM lParam) {
+    auto found = g_emptyTexts.find(list);
+    if (found == g_emptyTexts.end()) {
+        return DefWindowProcW(list, message, wParam, lParam);
+    }
+    WNDPROC proc = found->second.proc;
+    if (message == WM_NCDESTROY) {
+        g_emptyTexts.erase(found);
+        return CallWindowProcW(proc, list, message, wParam, lParam);
+    }
+    LRESULT result = CallWindowProcW(proc, list, message, wParam, lParam);
+    if (message == WM_PAINT && ListView_GetItemCount(list) == 0 && !found->second.text.empty()) {
+        RECT area;
+        GetClientRect(list, &area);
+        RECT header = {};
+        if (HWND headerControl = ListView_GetHeader(list)) {
+            GetWindowRect(headerControl, &header);
+        }
+        area.top += (header.bottom - header.top) + Scale(16);
+        InflateRect(&area, -Scale(16), 0);
+        HDC dc = GetDC(list);
+        HGDIOBJ old = SelectObject(dc, UiFont());
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, GetSysColor(COLOR_GRAYTEXT));
+        DrawTextW(dc, found->second.text.c_str(), -1, &area, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+        SelectObject(dc, old);
+        ReleaseDC(list, dc);
+    }
+    return result;
+}
+
+}  // namespace
+
+void SetEmptyText(HWND list, const std::wstring& text) {
+    auto found = g_emptyTexts.find(list);
+    if (found == g_emptyTexts.end()) {
+        WNDPROC proc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(list, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(EmptyTextProc)));
+        g_emptyTexts[list] = {proc, text};
+    } else if (found->second.text != text) {
+        found->second.text = text;
+    } else {
+        return;
+    }
+    InvalidateRect(list, nullptr, TRUE);
+}
+
+void DrawEtchedFrame(HDC dc, RECT rect) {
+    DrawEdge(dc, &rect, EDGE_ETCHED, BF_RECT);
+}
+
 Sidecar::Callback ErrorReporter(HWND owner, std::wstring action) {
     return [owner, action](const json&, const std::string& error) {
         if (!error.empty()) {

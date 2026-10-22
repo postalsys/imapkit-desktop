@@ -1,7 +1,10 @@
-// The Server page: listeners, the REST API, test accounts, script rules, the mailbox files, and the IMAP extensions
-// and quirk presets of ImapKit
+// The Server page. A status banner says whether the server runs and where, with Start/Stop and Apply. The left
+// column has what most tests need: where the server listens, the test accounts, and the settings to type into an
+// email client. The right column has the advanced tools of ImapKit on tabs: IMAP extensions, quirks, fault scripts
+// and the REST API. Mailbox import, export and reset are in the File menu
 #include "app.h"
 
+#include <shellapi.h>
 #include <windowsx.h>
 
 #include <algorithm>
@@ -10,48 +13,73 @@
 namespace {
 
 enum ControlId {
-    IDC_HOST = 200,
+    IDC_TOGGLE = 200,
+    IDC_APPLY,
+    IDC_HOST,
     IDC_IMAP_PORT,
+    IDC_IMAPS_ON,
     IDC_IMAPS_PORT,
+    IDC_SMTP_ON,
     IDC_SMTP_PORT,
-    IDC_REST_ENABLED,
-    IDC_REST_PORT,
-    IDC_REST_TOKEN,
     IDC_USERS,
     IDC_USER_ADD,
     IDC_USER_EDIT,
     IDC_USER_REMOVE,
-    IDC_SCRIPT_LABEL,
+    IDC_CLIENT_SETTINGS,
+    IDC_COPY_SETTINGS,
+    IDC_ADVANCED,
+    IDC_PLUGINS,
+    IDC_PLUGIN_DEFAULTS,
+    IDC_QUIRKS,
+    IDC_PLUGIN_HELP,
+    IDC_QUIRK_HELP,
+    IDC_SCRIPT_RULES,
     IDC_SCRIPT_LOAD,
     IDC_SCRIPT_CLEAR,
-    IDC_PLUGINS,
-    IDC_QUIRKS,
-    IDC_HELP_TEXT,
-    IDC_START,
-    IDC_STOP,
-    IDC_EXPORT,
-    IDC_IMPORT,
-    IDC_RESET,
-    IDC_STATE,
+    IDC_SCRIPT_DOCS,
+    IDC_REST_ENABLED,
+    IDC_REST_PORT,
+    IDC_REST_TOKEN,
+    IDC_REST_URL,
+    IDC_REST_COPY,
+    IDC_REST_DOCS,
 };
 
+enum AdvancedTab { TAB_EXTENSIONS, TAB_QUIRKS, TAB_SCRIPTS, TAB_REST, TAB_COUNT };
+
 const wchar_t* kJsonFilter = L"JSON files (*.json)\0*.json\0All files (*.*)\0*.*\0";
+const wchar_t* kHostItems[] = {L"127.0.0.1 (this computer only)", L"0.0.0.0 (all network interfaces)"};
 
 struct User {
     std::wstring name;
     std::wstring password;
 };
 
+// the host name an email client uses for an address the server listens on
+std::wstring ClientHost(const std::wstring& address) {
+    if (address.empty() || address == L"127.0.0.1" || address == L"::1" || address == L"localhost") {
+        return L"localhost";
+    }
+    if (address == L"0.0.0.0" || address == L"::") {
+        wchar_t name[256];
+        DWORD size = 256;
+        return GetComputerNameExW(ComputerNameDnsHostname, name, &size) ? name : L"this computer";
+    }
+    return address;
+}
+
 class ServerPage : public Page {
 public:
+    // the group boxes draw only their frame, the page paints under them
     bool ClipChildren() const override { return false; }
 
     void OnEvent(const std::string& name, const json& data) override {
         if (name == "ready") {
             TheSidecar().Call("hello", json::object(), [this](const json& result, const std::string& error) {
                 if (error.empty()) {
-                    plugins_ = result["plugins"];
+                    plugins_ = result.value("plugins", json::array());
                     quirks_ = result.value("quirks", json::array());
+                    defaults_ = result.value("defaults", json::object());
                     LoadConfig(result["config"]);
                     ShowState(result["status"]);
                 }
@@ -63,207 +91,273 @@ public:
 
 protected:
     void OnCreate() override {
-        listenersGroup_ = AddControl(L"BUTTON", L"Listeners", BS_GROUPBOX, 0);
-        restGroup_ = AddControl(L"BUTTON", L"REST API", BS_GROUPBOX, 0);
+        // the banner is painted, its buttons sit on it
+        toggle_ = AddControl(L"BUTTON", L"&Start", WS_TABSTOP | BS_DEFPUSHBUTTON, IDC_TOGGLE);
+        apply_ = AddControl(L"BUTTON", L"&Apply Changes", WS_TABSTOP, IDC_APPLY);
+        EnableWindow(apply_, FALSE);
+
+        connectionGroup_ = AddControl(L"BUTTON", L"Connection", BS_GROUPBOX, 0);
+        hostLabel_ = AddControl(L"STATIC", L"&Listen on:", SS_LEFT, 0);
+        host_ = AddControl(WC_COMBOBOXW, L"", WS_TABSTOP | CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL, IDC_HOST);
+        for (const wchar_t* item : kHostItems) {
+            ComboBox_AddString(host_, item);
+        }
+        imapLabel_ = AddControl(L"STATIC", L"&IMAP port (STARTTLS):", SS_LEFT, 0);
+        imapPort_ = AddControl(L"EDIT", L"", WS_TABSTOP | ES_NUMBER, IDC_IMAP_PORT, WS_EX_CLIENTEDGE);
+        imapsOn_ = AddControl(L"BUTTON", L"IMAP&S port (SSL/TLS):", WS_TABSTOP | BS_AUTOCHECKBOX, IDC_IMAPS_ON);
+        imapsPort_ = AddControl(L"EDIT", L"", WS_TABSTOP | ES_NUMBER, IDC_IMAPS_PORT, WS_EX_CLIENTEDGE);
+        smtpOn_ = AddControl(L"BUTTON", L"S&MTP port:", WS_TABSTOP | BS_AUTOCHECKBOX, IDC_SMTP_ON);
+        smtpPort_ = AddControl(L"EDIT", L"", WS_TABSTOP | ES_NUMBER, IDC_SMTP_PORT, WS_EX_CLIENTEDGE);
+
         usersGroup_ = AddControl(L"BUTTON", L"Test accounts", BS_GROUPBOX, 0);
-        extensionsGroup_ = AddControl(L"BUTTON", L"IMAP extensions", BS_GROUPBOX, 0);
-        quirksGroup_ = AddControl(L"BUTTON", L"Quirk presets (behave like a known server)", BS_GROUPBOX, 0);
+        usersList_ = AddControl(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS, IDC_USERS, WS_EX_CLIENTEDGE);
+        ListView_SetExtendedListViewStyle(usersList_, LVS_EX_FULLROWSELECT);
+        AddColumns(usersList_, {{L"User name", 140}, {L"Password", 130}});
+        userAdd_ = AddControl(L"BUTTON", L"A&dd...", WS_TABSTOP, IDC_USER_ADD);
+        userEdit_ = AddControl(L"BUTTON", L"&Edit...", WS_TABSTOP, IDC_USER_EDIT);
+        userRemove_ = AddControl(L"BUTTON", L"&Remove", WS_TABSTOP, IDC_USER_REMOVE);
 
-        AddRow(L"Address:", IDC_HOST, ES_AUTOHSCROLL);
-        AddRow(L"IMAP port (STARTTLS):", IDC_IMAP_PORT, ES_NUMBER);
-        AddRow(L"IMAPS port (TLS, 0 = off):", IDC_IMAPS_PORT, ES_NUMBER);
-        AddRow(L"SMTP port (0 = off):", IDC_SMTP_PORT, ES_NUMBER);
-        restEnabled_ = AddControl(L"BUTTON", L"&Enable the REST API (control API over HTTP)", WS_TABSTOP | BS_AUTOCHECKBOX, IDC_REST_ENABLED);
-        AddRow(L"REST port:", IDC_REST_PORT, ES_NUMBER);
-        AddRow(L"Token (optional):", IDC_REST_TOKEN, ES_AUTOHSCROLL);
+        clientGroup_ = AddControl(L"BUTTON", L"Email client settings", BS_GROUPBOX, 0);
+        clientSettings_ = AddControl(L"EDIT", L"", WS_TABSTOP | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL, IDC_CLIENT_SETTINGS,
+                                     WS_EX_CLIENTEDGE);
+        copySettings_ = AddControl(L"BUTTON", L"&Copy", WS_TABSTOP, IDC_COPY_SETTINGS);
 
-        users_list_ = AddControl(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS, IDC_USERS, WS_EX_CLIENTEDGE);
-        ListView_SetExtendedListViewStyle(users_list_, LVS_EX_FULLROWSELECT);
-        AddColumns(users_list_, {{L"User name", 150}, {L"Password", 130}});
-        userAdd_ = AddControl(L"BUTTON", L"&Add...", WS_TABSTOP, IDC_USER_ADD);
-        userEdit_ = AddControl(L"BUTTON", L"E&dit...", WS_TABSTOP, IDC_USER_EDIT);
-        userRemove_ = AddControl(L"BUTTON", L"Re&move", WS_TABSTOP, IDC_USER_REMOVE);
+        advanced_ = AddControl(WC_TABCONTROLW, L"", WS_TABSTOP | WS_CLIPSIBLINGS, IDC_ADVANCED);
+        const wchar_t* tabNames[] = {L"IMAP Extensions", L"Quirks", L"Fault Scripts", L"REST API"};
+        for (int i = 0; i < TAB_COUNT; i++) {
+            TCITEMW item = {};
+            item.mask = TCIF_TEXT;
+            item.pszText = const_cast<wchar_t*>(tabNames[i]);
+            TabCtrl_InsertItem(advanced_, i, &item);
+        }
 
-        scriptLabel_ = AddControl(L"STATIC", L"Script rules: none", SS_LEFT | SS_CENTERIMAGE, IDC_SCRIPT_LABEL);
-        scriptLoad_ = AddControl(L"BUTTON", L"&Load...", WS_TABSTOP, IDC_SCRIPT_LOAD);
-        scriptClear_ = AddControl(L"BUTTON", L"Clea&r", WS_TABSTOP, IDC_SCRIPT_CLEAR);
+        auto& extensions = tabs_[TAB_EXTENSIONS];
+        extensions.push_back(pluginsHint_ = AddControl(L"STATIC", L"The capabilities the server advertises. Turn off what a client must cope without.",
+                                                       SS_LEFT, 0));
+        extensions.push_back(pluginsList_ = AddCheckList(IDC_PLUGINS));
+        extensions.push_back(pluginHelp_ = AddControl(L"STATIC", L"Select an extension to see what it does.", SS_LEFT, IDC_PLUGIN_HELP, WS_EX_STATICEDGE));
+        extensions.push_back(pluginDefaults_ = AddControl(L"BUTTON", L"Restore &Defaults", WS_TABSTOP, IDC_PLUGIN_DEFAULTS));
 
-        start_ = AddControl(L"BUTTON", L"&Start", WS_TABSTOP | BS_DEFPUSHBUTTON, IDC_START);
-        stop_ = AddControl(L"BUTTON", L"S&top", WS_TABSTOP, IDC_STOP);
-        export_ = AddControl(L"BUTTON", L"E&xport mailboxes...", WS_TABSTOP, IDC_EXPORT);
-        import_ = AddControl(L"BUTTON", L"&Import mailboxes...", WS_TABSTOP, IDC_IMPORT);
-        reset_ = AddControl(L"BUTTON", L"Reset mailbo&xes...", WS_TABSTOP, IDC_RESET);
-        state_ = AddControl(L"STATIC", L"Starting the sidecar...", SS_LEFT, IDC_STATE);
+        auto& quirks = tabs_[TAB_QUIRKS];
+        quirks.push_back(quirksHint_ = AddControl(L"STATIC", L"Make the server behave like a known real server, to test how a client copes with it.",
+                                                  SS_LEFT, 0));
+        quirks.push_back(quirksList_ = AddCheckList(IDC_QUIRKS));
+        quirks.push_back(quirkHelp_ = AddControl(L"STATIC", L"Select a quirk to see what it does.", SS_LEFT, IDC_QUIRK_HELP, WS_EX_STATICEDGE));
 
-        pluginsList_ = AddCheckList(IDC_PLUGINS);
-        quirksList_ = AddCheckList(IDC_QUIRKS);
-        help_ = AddControl(L"STATIC", L"Select an extension or a quirk to see what it does. Changes take effect when the server starts.", SS_LEFT,
-                           IDC_HELP_TEXT, WS_EX_STATICEDGE);
-        EnableWindow(stop_, FALSE);
+        auto& scripts = tabs_[TAB_SCRIPTS];
+        scripts.push_back(scriptsHint_ = AddControl(L"STATIC",
+                                                    L"Script rules make the server misbehave on purpose: refuse or delay a command, cut a response short, "
+                                                    L"drop the connection. Load them from a JSON file.",
+                                                    SS_LEFT, 0));
+        scripts.push_back(scriptRules_ = AddControl(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL,
+                                                    IDC_SCRIPT_RULES, WS_EX_CLIENTEDGE));
+        AddColumns(scriptRules_, {{L"", 900}});
+        SendMessageW(scriptRules_, WM_SETFONT, reinterpret_cast<WPARAM>(MonoFont()), TRUE);
+        SetEmptyText(scriptRules_, L"No script rules, the server follows the protocol.");
+        scripts.push_back(scriptLoad_ = AddControl(L"BUTTON", L"L&oad...", WS_TABSTOP, IDC_SCRIPT_LOAD));
+        scripts.push_back(scriptClear_ = AddControl(L"BUTTON", L"Clea&r", WS_TABSTOP, IDC_SCRIPT_CLEAR));
+        scripts.push_back(scriptDocs_ = AddControl(L"BUTTON", L"Rule &Reference", WS_TABSTOP, IDC_SCRIPT_DOCS));
+
+        auto& rest = tabs_[TAB_REST];
+        rest.push_back(restHint_ = AddControl(L"STATIC",
+                                              L"The control API over HTTP, for test suites in any language: add messages, change flags, "
+                                              L"disconnect sessions and follow events while a client runs.",
+                                              SS_LEFT, 0));
+        rest.push_back(restEnabled_ = AddControl(L"BUTTON", L"E&nable the REST API", WS_TABSTOP | BS_AUTOCHECKBOX, IDC_REST_ENABLED));
+        rest.push_back(restPortLabel_ = AddControl(L"STATIC", L"Port:", SS_LEFT, 0));
+        rest.push_back(restPort_ = AddControl(L"EDIT", L"", WS_TABSTOP | ES_NUMBER, IDC_REST_PORT, WS_EX_CLIENTEDGE));
+        rest.push_back(restTokenLabel_ = AddControl(L"STATIC", L"Token (optional):", SS_LEFT, 0));
+        rest.push_back(restToken_ = AddControl(L"EDIT", L"", WS_TABSTOP | ES_AUTOHSCROLL, IDC_REST_TOKEN, WS_EX_CLIENTEDGE));
+        rest.push_back(restUrlLabel_ = AddControl(L"STATIC", L"Address:", SS_LEFT, 0));
+        rest.push_back(restUrl_ = AddControl(L"EDIT", L"", ES_READONLY | ES_AUTOHSCROLL, IDC_REST_URL, WS_EX_CLIENTEDGE));
+        rest.push_back(restCopy_ = AddControl(L"BUTTON", L"Cop&y", WS_TABSTOP, IDC_REST_COPY));
+        rest.push_back(restDocs_ = AddControl(L"BUTTON", L"API &Reference", WS_TABSTOP, IDC_REST_DOCS));
+
+        // the tab control under the controls of its tabs
+        SetWindowPos(advanced_, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+        ShowTab(TAB_EXTENSIONS);
+        UpdateEnabled();
     }
 
     void OnSize(int width, int height) override {
-        int pad = Scale(8);
-        int row = Scale(24);
-        int caption = Scale(18);
-        int labelWidth = Scale(150);
-        int editWidth = Scale(160);
-        int groupWidth = labelWidth + editWidth + 3 * pad;
-        int left = pad;
-        int y = pad;
-
-        auto placeRow = [&](int index, int top) {
-            MoveWindow(labels_[index], left + pad, top + Scale(3), labelWidth, Scale(16), TRUE);
-            MoveWindow(edits_[index], left + pad + labelWidth, top, editWidth, Scale(21), TRUE);
-        };
-
-        MoveWindow(listenersGroup_, left, y, groupWidth, caption + 4 * row + pad, TRUE);
-        for (int i = 0; i < 4; i++) {
-            placeRow(i, y + caption + i * row);
+        if (width == 0 || height == 0) {
+            return;
         }
-        y += caption + 4 * row + 2 * pad;
+        int pad = Scale(8);
+        int row = Scale(26);
+        int caption = Scale(18);
+        int button = Scale(100);
 
-        MoveWindow(restGroup_, left, y, groupWidth, caption + 3 * row + pad, TRUE);
-        MoveWindow(restEnabled_, left + pad, y + caption, groupWidth - 2 * pad, Scale(20), TRUE);
-        placeRow(4, y + caption + row);
-        placeRow(5, y + caption + 2 * row);
-        y += caption + 3 * row + 2 * pad;
+        banner_ = {pad, pad, width - pad, pad + Scale(52)};
+        MoveWindow(toggle_, banner_.right - pad - button, banner_.top + Scale(14), button, Scale(25), TRUE);
+        MoveWindow(apply_, banner_.right - 2 * (pad + button), banner_.top + Scale(14), button, Scale(25), TRUE);
 
-        int listHeight = Scale(76);
-        MoveWindow(usersGroup_, left, y, groupWidth, caption + listHeight + row + 2 * pad, TRUE);
-        MoveWindow(users_list_, left + pad, y + caption, groupWidth - 2 * pad, listHeight, TRUE);
-        int buttonTop = y + caption + listHeight + Scale(5);
-        int small = Scale(70);
-        MoveWindow(userAdd_, left + pad, buttonTop, small, Scale(23), TRUE);
-        MoveWindow(userEdit_, left + pad + small + Scale(4), buttonTop, small, Scale(23), TRUE);
-        MoveWindow(userRemove_, left + pad + 2 * (small + Scale(4)), buttonTop, small, Scale(23), TRUE);
-        y += caption + listHeight + row + 3 * pad;
+        int top = banner_.bottom + pad;
+        int left = pad;
+        int columnWidth = Scale(340);
+        int labelWidth = Scale(150);
+        int fieldLeft = left + pad + labelWidth;
+        int fieldWidth = columnWidth - labelWidth - 2 * pad;
 
-        MoveWindow(scriptLabel_, left, y, groupWidth - 2 * small - Scale(8), Scale(23), TRUE);
-        MoveWindow(scriptLoad_, left + groupWidth - 2 * small - Scale(4), y, small, Scale(23), TRUE);
-        MoveWindow(scriptClear_, left + groupWidth - small, y, small, Scale(23), TRUE);
-        y += Scale(23) + pad;
+        MoveWindow(connectionGroup_, left, top, columnWidth, caption + 4 * row + pad, TRUE);
+        int y = top + caption;
+        MoveWindow(hostLabel_, left + pad, y + Scale(4), labelWidth, Scale(16), TRUE);
+        MoveWindow(host_, fieldLeft, y, fieldWidth, Scale(200), TRUE);
+        y += row;
+        MoveWindow(imapLabel_, left + pad, y + Scale(4), labelWidth, Scale(16), TRUE);
+        MoveWindow(imapPort_, fieldLeft, y, Scale(70), Scale(21), TRUE);
+        y += row;
+        MoveWindow(imapsOn_, left + pad, y + Scale(2), labelWidth, Scale(18), TRUE);
+        MoveWindow(imapsPort_, fieldLeft, y, Scale(70), Scale(21), TRUE);
+        y += row;
+        MoveWindow(smtpOn_, left + pad, y + Scale(2), labelWidth, Scale(18), TRUE);
+        MoveWindow(smtpPort_, fieldLeft, y, Scale(70), Scale(21), TRUE);
+        top += caption + 4 * row + 2 * pad;
 
-        int button = Scale(102);
-        MoveWindow(start_, left, y, button, Scale(25), TRUE);
-        MoveWindow(stop_, left + button + Scale(5), y, button, Scale(25), TRUE);
-        y += Scale(25) + Scale(5);
-        MoveWindow(export_, left, y, button, Scale(25), TRUE);
-        MoveWindow(import_, left + button + Scale(5), y, button, Scale(25), TRUE);
-        MoveWindow(reset_, left + 2 * (button + Scale(5)), y, button, Scale(25), TRUE);
-        y += Scale(25) + pad;
-        MoveWindow(state_, left, y, groupWidth, std::max(Scale(16), height - y - pad), TRUE);
+        int listHeight = Scale(64);
+        int usersHeight = caption + listHeight + Scale(32) + pad;
+        MoveWindow(usersGroup_, left, top, columnWidth, usersHeight, TRUE);
+        MoveWindow(usersList_, left + pad, top + caption, columnWidth - 2 * pad, listHeight, TRUE);
+        int narrow = Scale(80);
+        int buttonTop = top + caption + listHeight + Scale(6);
+        MoveWindow(userAdd_, left + pad, buttonTop, narrow, Scale(23), TRUE);
+        MoveWindow(userEdit_, left + pad + narrow + Scale(4), buttonTop, narrow, Scale(23), TRUE);
+        MoveWindow(userRemove_, left + pad + 2 * (narrow + Scale(4)), buttonTop, narrow, Scale(23), TRUE);
+        top += usersHeight + pad;
 
-        int right = left + groupWidth + pad;
-        int columnWidth = width - right - pad;
-        int helpHeight = Scale(64);
-        int available = height - 3 * pad - helpHeight;
-        int quirksHeight = Scale(150);
-        int extensionsHeight = available - quirksHeight - pad;
-        MoveWindow(extensionsGroup_, right, pad, columnWidth, extensionsHeight, TRUE);
-        MoveWindow(pluginsList_, right + pad, pad + caption, columnWidth - 2 * pad, extensionsHeight - caption - pad, TRUE);
-        int quirksTop = pad + extensionsHeight + pad;
-        MoveWindow(quirksGroup_, right, quirksTop, columnWidth, quirksHeight, TRUE);
-        MoveWindow(quirksList_, right + pad, quirksTop + caption, columnWidth - 2 * pad, quirksHeight - caption - pad, TRUE);
-        MoveWindow(help_, right, height - pad - helpHeight, columnWidth, helpHeight, TRUE);
-        ListView_SetColumnWidth(pluginsList_, 0, columnWidth - 2 * pad - Scale(24));
-        ListView_SetColumnWidth(quirksList_, 0, columnWidth - 2 * pad - Scale(24));
+        int clientHeight = std::max(Scale(120), height - top - pad);
+        MoveWindow(clientGroup_, left, top, columnWidth, clientHeight, TRUE);
+        MoveWindow(clientSettings_, left + pad, top + caption, columnWidth - 2 * pad, clientHeight - caption - Scale(36), TRUE);
+        MoveWindow(copySettings_, left + columnWidth - pad - narrow, top + clientHeight - Scale(31), narrow, Scale(23), TRUE);
+
+        RECT tabs = {left + columnWidth + pad, banner_.bottom + pad, width - pad, height - pad};
+        MoveWindow(advanced_, tabs.left, tabs.top, tabs.right - tabs.left, tabs.bottom - tabs.top, TRUE);
+        RECT area = tabs;
+        TabCtrl_AdjustRect(advanced_, FALSE, &area);
+        InflateRect(&area, -Scale(6), -Scale(6));
+        LayoutTabs(area);
+        InvalidateRect(hwnd_, &banner_, TRUE);
     }
 
     void OnCommand(int id, int code, HWND) override {
+        // edits of the settings, they apply on the next start
+        if (code == EN_CHANGE && (id == IDC_IMAP_PORT || id == IDC_IMAPS_PORT || id == IDC_SMTP_PORT || id == IDC_REST_PORT || id == IDC_REST_TOKEN)) {
+            SettingsChanged();
+            return;
+        }
+        if (id == IDC_HOST && (code == CBN_EDITCHANGE || code == CBN_SELCHANGE)) {
+            // after a selection the combo box has the new text only after this notification
+            PostMessageW(hwnd_, WM_APP, 0, 0);
+            return;
+        }
         if (code != BN_CLICKED) {
             return;
         }
         switch (id) {
-            case IDC_START:
+            case IDC_TOGGLE:
+                if (running_) {
+                    TheSidecar().Call("stop");
+                } else {
+                    Start();
+                }
+                break;
+            case IDC_APPLY:
                 Start();
                 break;
-            case IDC_STOP:
-                TheSidecar().Call("stop");
+            case IDC_IMAPS_ON:
+            case IDC_SMTP_ON:
+            case IDC_REST_ENABLED:
+                UpdateEnabled();
+                SettingsChanged();
                 break;
-            case IDC_RESET:
-                if (MessageBoxW(hwnd_, L"Remove every message and folder and start over with the default mailboxes?", L"Reset mailboxes",
-                                MB_ICONWARNING | MB_OKCANCEL) == IDOK) {
-                    TheSidecar().Call("reset");
-                }
-                break;
-            case IDC_EXPORT: {
-                std::wstring file = SaveFileDialog(hwnd_, L"Export mailboxes", kJsonFilter, L"json", L"mailboxes");
-                if (!file.empty()) {
-                    TheSidecar().Call("exportStorage", {{"file", Narrow(file)}}, ErrorReporter(hwnd_, L"Export"));
-                }
-                break;
-            }
-            case IDC_IMPORT: {
-                std::wstring file = OpenFileDialog(hwnd_, L"Import mailboxes", kJsonFilter);
-                if (!file.empty() && MessageBoxW(hwnd_, L"Replace every mailbox with the ones in the file?", L"Import mailboxes",
-                                                 MB_ICONWARNING | MB_OKCANCEL) == IDOK) {
-                    TheSidecar().Call("importStorage", {{"file", Narrow(file)}}, ErrorReporter(hwnd_, L"Import"));
-                }
-                break;
-            }
             case IDC_USER_ADD:
                 EditUser(-1);
                 break;
             case IDC_USER_EDIT:
-                EditUser(ListView_GetNextItem(users_list_, -1, LVNI_SELECTED));
+                EditUser(ListView_GetNextItem(usersList_, -1, LVNI_SELECTED));
                 break;
             case IDC_USER_REMOVE: {
-                int selected = ListView_GetNextItem(users_list_, -1, LVNI_SELECTED);
+                int selected = ListView_GetNextItem(usersList_, -1, LVNI_SELECTED);
                 if (selected >= 0 && users_.size() > 1) {
                     users_.erase(users_.begin() + selected);
                     FillUsers();
+                    SettingsChanged();
                 }
                 break;
             }
-            case IDC_SCRIPT_LOAD: {
-                std::wstring file = OpenFileDialog(hwnd_, L"Load script rules", kJsonFilter);
-                if (!file.empty()) {
-                    TheSidecar().Call("readScript", {{"file", Narrow(file)}}, [this](const json& rules, const std::string& error) {
-                        if (!error.empty()) {
-                            MessageBoxW(hwnd_, Widen(error).c_str(), L"Script rules", MB_ICONERROR);
-                            return;
-                        }
-                        script_ = rules;
-                        ShowScript();
-                    });
-                }
+            case IDC_COPY_SETTINGS:
+                CopyToClipboard(hwnd_, GetWindowString(clientSettings_));
+                SetStatus(STATUS_INFO, L"Email client settings copied");
                 break;
-            }
+            case IDC_PLUGIN_DEFAULTS:
+                FillCheckList(pluginsList_, plugins_, NameSet(defaults_.value("plugins", json::array())));
+                SettingsChanged();
+                break;
+            case IDC_SCRIPT_LOAD:
+                LoadScript();
+                break;
             case IDC_SCRIPT_CLEAR:
                 script_ = json::array();
                 ShowScript();
+                SettingsChanged();
+                break;
+            case IDC_SCRIPT_DOCS:
+                ShellExecuteW(nullptr, L"open", L"https://imapkit.com/docs/faults/scripted-faults", nullptr, nullptr, SW_SHOWNORMAL);
+                break;
+            case IDC_REST_COPY:
+                CopyToClipboard(hwnd_, GetWindowString(restUrl_));
+                SetStatus(STATUS_INFO, L"REST API address copied");
+                break;
+            case IDC_REST_DOCS:
+                ShellExecuteW(nullptr, L"open", L"https://imapkit.com/docs/rest-api/overview", nullptr, nullptr, SW_SHOWNORMAL);
                 break;
         }
     }
 
     LRESULT OnNotify(NMHDR* header) override {
-        if (header->code == NM_DBLCLK && header->hwndFrom == users_list_) {
-            EditUser(ListView_GetNextItem(users_list_, -1, LVNI_SELECTED));
+        if (header->hwndFrom == advanced_ && header->code == TCN_SELCHANGE) {
+            ShowTab(TabCtrl_GetCurSel(advanced_));
+            return 0;
         }
-        if (header->code != LVN_ITEMCHANGED) {
+        if (header->code == NM_DBLCLK && header->hwndFrom == usersList_) {
+            EditUser(ListView_GetNextItem(usersList_, -1, LVNI_SELECTED));
+            return 0;
+        }
+        if (header->code != LVN_ITEMCHANGED || (header->hwndFrom != pluginsList_ && header->hwndFrom != quirksList_)) {
             return 0;
         }
         auto* change = reinterpret_cast<NMLISTVIEW*>(header);
-        if (!(change->uNewState & LVIS_SELECTED) || change->iItem < 0) {
-            return 0;
+        bool plugin = header->hwndFrom == pluginsList_;
+        // a checkbox is the state image of the item
+        if ((change->uChanged & LVIF_STATE) && ((change->uNewState ^ change->uOldState) & LVIS_STATEIMAGEMASK)) {
+            SettingsChanged();
         }
         // the help text of the extension or quirk, they describe themselves with different keys
-        bool plugin = header->hwndFrom == pluginsList_;
         const json& items = plugin ? plugins_ : quirks_;
-        if ((plugin || header->hwndFrom == quirksList_) && change->iItem < static_cast<int>(items.size())) {
+        if ((change->uNewState & LVIS_SELECTED) && change->iItem >= 0 && change->iItem < static_cast<int>(items.size())) {
             const json& item = items[change->iItem];
-            SetWindowTextW(help_, (JsonText(item, "name") + L": " + JsonText(item, plugin ? "help" : "description")).c_str());
+            SetWindowTextW(plugin ? pluginHelp_ : quirkHelp_, (JsonText(item, "name") + L": " + JsonText(item, plugin ? "help" : "description")).c_str());
         }
         return 0;
     }
 
-private:
-    void AddRow(const wchar_t* label, int id, DWORD style) {
-        labels_.push_back(AddControl(L"STATIC", label, SS_LEFT, 0));
-        edits_.push_back(AddControl(L"EDIT", L"", WS_TABSTOP | style, id, WS_EX_CLIENTEDGE));
+    LRESULT OnMessage(UINT message, WPARAM, LPARAM, bool& handled) override {
+        if (message == WM_APP) {
+            SettingsChanged();
+            return 0;
+        }
+        if (message == WM_PAINT) {
+            PAINTSTRUCT paint;
+            HDC dc = BeginPaint(hwnd_, &paint);
+            PaintBanner(dc);
+            EndPaint(hwnd_, &paint);
+            return 0;
+        }
+        handled = false;
+        return 0;
     }
 
+private:
     HWND AddCheckList(int id) {
         HWND list = AddControl(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOCOLUMNHEADER, id,
                                WS_EX_CLIENTEDGE);
@@ -272,7 +366,94 @@ private:
         return list;
     }
 
+    void ShowTab(int index) {
+        for (int i = 0; i < TAB_COUNT; i++) {
+            for (HWND control : tabs_[i]) {
+                ShowWindow(control, i == index ? SW_SHOW : SW_HIDE);
+            }
+        }
+    }
+
+    void LayoutTabs(const RECT& area) {
+        int width = area.right - area.left;
+        int pad = Scale(6);
+        int button = Scale(110);
+        int hint = Scale(30);
+        int helpHeight = Scale(64);
+
+        // extensions: hint, list, description, defaults
+        MoveWindow(pluginsHint_, area.left, area.top, width, hint, TRUE);
+        int listBottom = area.bottom - helpHeight - Scale(25) - 2 * pad;
+        MoveWindow(pluginsList_, area.left, area.top + hint, width, listBottom - area.top - hint, TRUE);
+        MoveWindow(pluginHelp_, area.left, listBottom + pad, width, helpHeight, TRUE);
+        MoveWindow(pluginDefaults_, area.right - button, area.bottom - Scale(25), button, Scale(25), TRUE);
+        ListView_SetColumnWidth(pluginsList_, 0, width - Scale(24));
+
+        // quirks: hint, list, description
+        MoveWindow(quirksHint_, area.left, area.top, width, hint, TRUE);
+        MoveWindow(quirksList_, area.left, area.top + hint, width, area.bottom - helpHeight - pad - area.top - hint, TRUE);
+        MoveWindow(quirkHelp_, area.left, area.bottom - helpHeight, width, helpHeight, TRUE);
+        ListView_SetColumnWidth(quirksList_, 0, width - Scale(24));
+
+        // fault scripts: hint, rules, buttons
+        int scriptsHint = Scale(44);
+        MoveWindow(scriptsHint_, area.left, area.top, width, scriptsHint, TRUE);
+        MoveWindow(scriptRules_, area.left, area.top + scriptsHint, width, area.bottom - Scale(25) - pad - area.top - scriptsHint, TRUE);
+        MoveWindow(scriptLoad_, area.left, area.bottom - Scale(25), Scale(80), Scale(25), TRUE);
+        MoveWindow(scriptClear_, area.left + Scale(80) + pad, area.bottom - Scale(25), Scale(80), Scale(25), TRUE);
+        MoveWindow(scriptDocs_, area.right - button, area.bottom - Scale(25), button, Scale(25), TRUE);
+
+        // REST API: hint, enable, port, token, address, reference
+        int restHint = Scale(44);
+        int y = area.top;
+        MoveWindow(restHint_, area.left, y, width, restHint, TRUE);
+        y += restHint + pad;
+        MoveWindow(restEnabled_, area.left, y, width, Scale(20), TRUE);
+        y += Scale(28);
+        int labelWidth = Scale(110);
+        MoveWindow(restPortLabel_, area.left, y + Scale(3), labelWidth, Scale(16), TRUE);
+        MoveWindow(restPort_, area.left + labelWidth, y, Scale(70), Scale(21), TRUE);
+        y += Scale(28);
+        MoveWindow(restTokenLabel_, area.left, y + Scale(3), labelWidth, Scale(16), TRUE);
+        MoveWindow(restToken_, area.left + labelWidth, y, std::min(Scale(240), width - labelWidth), Scale(21), TRUE);
+        y += Scale(28);
+        MoveWindow(restUrlLabel_, area.left, y + Scale(3), labelWidth, Scale(16), TRUE);
+        int urlWidth = std::min(Scale(240), width - labelWidth - Scale(70) - pad);
+        MoveWindow(restUrl_, area.left + labelWidth, y, urlWidth, Scale(21), TRUE);
+        MoveWindow(restCopy_, area.left + labelWidth + urlWidth + pad, y - Scale(1), Scale(70), Scale(23), TRUE);
+        MoveWindow(restDocs_, area.right - button, area.bottom - Scale(25), button, Scale(25), TRUE);
+    }
+
+    // the state of the server in the banner: a light, what it is, and where it listens
+    void PaintBanner(HDC dc) {
+        DrawEtchedFrame(dc, banner_);
+        int pad = Scale(12);
+        int light = Scale(14);
+        int lightTop = (banner_.top + banner_.bottom - light) / 2;
+        HBRUSH brush = CreateSolidBrush(bannerColor_);
+        HGDIOBJ oldBrush = SelectObject(dc, brush);
+        HGDIOBJ oldPen = SelectObject(dc, GetStockObject(DC_PEN));
+        SetDCPenColor(dc, RGB(64, 64, 64));
+        Ellipse(dc, banner_.left + pad, lightTop, banner_.left + pad + light, lightTop + light);
+        SelectObject(dc, oldPen);
+        SelectObject(dc, oldBrush);
+        DeleteObject(brush);
+
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
+        int textLeft = banner_.left + 2 * pad + light;
+        RECT title = {textLeft, banner_.top + Scale(8), banner_.right - Scale(230), banner_.top + Scale(26)};
+        static HFONT titleFont = MakeFont(L"Tahoma", 10, FW_BOLD);
+        HGDIOBJ oldFont = SelectObject(dc, titleFont);
+        DrawTextW(dc, bannerTitle_.c_str(), -1, &title, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+        RECT detail = {textLeft, banner_.top + Scale(27), banner_.right - Scale(230), banner_.bottom - Scale(6)};
+        SelectObject(dc, UiFont());
+        DrawTextW(dc, bannerDetail_.c_str(), -1, &detail, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+        SelectObject(dc, oldFont);
+    }
+
     void FillCheckList(HWND list, const json& items, const std::set<std::string>& checked) {
+        loading_ = true;
         ListView_DeleteAllItems(list);
         int index = 0;
         for (const auto& entry : items) {
@@ -285,6 +466,7 @@ private:
             ListView_SetCheckState(list, index, checked.count(entry.value("name", "")) > 0);
             index++;
         }
+        loading_ = false;
     }
 
     json CheckedNames(HWND list, const json& items) {
@@ -308,14 +490,14 @@ private:
     }
 
     void FillUsers() {
-        ListView_DeleteAllItems(users_list_);
+        ListView_DeleteAllItems(usersList_);
         for (int i = 0; i < static_cast<int>(users_.size()); i++) {
             LVITEMW item = {};
             item.mask = LVIF_TEXT;
             item.iItem = i;
             item.pszText = users_[i].name.data();
-            ListView_InsertItem(users_list_, &item);
-            ListView_SetItemText(users_list_, i, 1, users_[i].password.data());
+            ListView_InsertItem(usersList_, &item);
+            ListView_SetItemText(usersList_, i, 1, users_[i].password.data());
         }
         EnableWindow(userRemove_, users_.size() > 1);
     }
@@ -336,24 +518,72 @@ private:
             users_[index] = user;
         }
         FillUsers();
+        SettingsChanged();
+    }
+
+    void LoadScript() {
+        std::wstring file = OpenFileDialog(hwnd_, L"Load script rules", kJsonFilter);
+        if (file.empty()) {
+            return;
+        }
+        TheSidecar().Call("readScript", {{"file", Narrow(file)}}, [this](const json& rules, const std::string& error) {
+            if (!error.empty()) {
+                MessageBoxW(hwnd_, Widen(error).c_str(), L"Script rules", MB_ICONERROR);
+                return;
+            }
+            script_ = rules;
+            ShowScript();
+            SettingsChanged();
+        });
     }
 
     void ShowScript() {
-        size_t count = script_.is_array() ? script_.size() : 0;
-        SetWindowTextW(scriptLabel_, count ? (L"Script rules: " + std::to_wstring(count) + L" loaded").c_str() : L"Script rules: none");
-        EnableWindow(scriptClear_, count > 0);
+        ListView_DeleteAllItems(scriptRules_);
+        int index = 0;
+        for (const auto& rule : script_.is_array() ? script_ : json::array()) {
+            std::wstring text = Widen(rule.dump());
+            LVITEMW item = {};
+            item.mask = LVIF_TEXT;
+            item.iItem = index++;
+            item.pszText = text.data();
+            ListView_InsertItem(scriptRules_, &item);
+        }
+        EnableWindow(scriptClear_, index > 0);
+    }
+
+    void UpdateEnabled() {
+        EnableWindow(imapsPort_, Button_GetCheck(imapsOn_) == BST_CHECKED);
+        EnableWindow(smtpPort_, Button_GetCheck(smtpOn_) == BST_CHECKED);
+        bool rest = Button_GetCheck(restEnabled_) == BST_CHECKED;
+        for (HWND control : {restPortLabel_, restPort_, restTokenLabel_, restToken_}) {
+            EnableWindow(control, rest);
+        }
+    }
+
+    // a port field of a listener that can be turned off: the port when on, 0 when off
+    static void LoadPort(HWND check, HWND edit, int port, int fallback) {
+        Button_SetCheck(check, port ? BST_CHECKED : BST_UNCHECKED);
+        SetWindowTextW(edit, std::to_wstring(port ? port : fallback).c_str());
     }
 
     void LoadConfig(const json& config) {
-        SetWindowTextW(edits_[0], JsonText(config, "host").c_str());
-        SetWindowTextW(edits_[1], std::to_wstring(config.value("imapPort", 0)).c_str());
-        SetWindowTextW(edits_[2], std::to_wstring(config.value("imapsPort", 0)).c_str());
-        SetWindowTextW(edits_[3], std::to_wstring(config.value("smtpPort", 0)).c_str());
+        loading_ = true;
+        std::wstring host = JsonText(config, "host");
+        int hostItem = host == L"127.0.0.1" ? 0 : host == L"0.0.0.0" ? 1 : -1;
+        ComboBox_SetCurSel(host_, hostItem);
+        if (hostItem < 0) {
+            SetWindowTextW(host_, host.c_str());
+        }
+        SetWindowTextW(imapPort_, std::to_wstring(config.value("imapPort", 0)).c_str());
+        LoadPort(imapsOn_, imapsPort_, config.value("imapsPort", 0), defaults_.value("imapsPort", 0));
+        LoadPort(smtpOn_, smtpPort_, config.value("smtpPort", 0), defaults_.value("smtpPort", 0));
+
         json rest = config.value("rest", json::object());
+        json restDefaults = defaults_.value("rest", json::object());
         Button_SetCheck(restEnabled_, rest.value("enabled", false) ? BST_CHECKED : BST_UNCHECKED);
-        SetWindowTextW(edits_[4], std::to_wstring(rest.value("port", 0)).c_str());
-        SetWindowTextW(edits_[5], JsonText(rest, "token").c_str());
-        restHost_ = rest.value("host", std::string("127.0.0.1"));
+        SetWindowTextW(restPort_, std::to_wstring(rest.value("port", restDefaults.value("port", 0))).c_str());
+        SetWindowTextW(restToken_, JsonText(rest, "token").c_str());
+        restHost_ = rest.value("host", restDefaults.value("host", std::string("127.0.0.1")));
 
         users_.clear();
         for (const auto& user : config.value("users", json::array())) {
@@ -364,24 +594,32 @@ private:
         ShowScript();
         FillCheckList(pluginsList_, plugins_, NameSet(config.value("plugins", json::array())));
         FillCheckList(quirksList_, quirks_, NameSet(config.value("quirks", json::array())));
+        UpdateEnabled();
+        loading_ = false;
+        applied_ = ReadConfig();
+        SettingsChanged();
     }
 
     json ReadConfig() {
-        auto number = [this](int index) { return _wtoi(GetWindowString(edits_[index]).c_str()); };
+        auto number = [](HWND edit) { return _wtoi(GetWindowString(edit).c_str()); };
+        auto optional = [&](HWND check, HWND edit) { return Button_GetCheck(check) == BST_CHECKED ? number(edit) : 0; };
+        // "127.0.0.1 (this computer only)" is 127.0.0.1
+        std::wstring host = GetWindowString(host_);
+        host = host.substr(0, host.find(L' '));
         json users = json::array();
         for (const User& user : users_) {
             users.push_back({{"username", Narrow(user.name)}, {"password", Narrow(user.password)}});
         }
         return {
-            {"host", Narrow(GetWindowString(edits_[0]))},
-            {"imapPort", number(1)},
-            {"imapsPort", number(2)},
-            {"smtpPort", number(3)},
+            {"host", Narrow(host)},
+            {"imapPort", number(imapPort_)},
+            {"imapsPort", optional(imapsOn_, imapsPort_)},
+            {"smtpPort", optional(smtpOn_, smtpPort_)},
             {"rest",
              {{"enabled", Button_GetCheck(restEnabled_) == BST_CHECKED},
-              {"port", number(4)},
+              {"port", number(restPort_)},
               {"host", restHost_},
-              {"token", Narrow(GetWindowString(edits_[5]))}}},
+              {"token", Narrow(GetWindowString(restToken_))}}},
             {"users", users},
             {"plugins", CheckedNames(pluginsList_, plugins_)},
             {"quirks", CheckedNames(quirksList_, quirks_)},
@@ -389,52 +627,130 @@ private:
         };
     }
 
+    // settings that differ from the ones the server runs with wait for Apply
+    void SettingsChanged() {
+        if (loading_) {
+            return;
+        }
+        changed_ = ReadConfig() != applied_;
+        EnableWindow(apply_, running_ && changed_);
+        UpdateBanner();
+        UpdateClientSettings();
+    }
+
     void Start() {
-        SetWindowTextW(state_, L"Starting...");
-        TheSidecar().Call("start", {{"config", ReadConfig()}}, [this](const json&, const std::string& error) {
-            if (!error.empty()) {
-                SetWindowTextW(state_, (L"Could not start: " + Widen(error)).c_str());
+        json config = ReadConfig();
+        bannerTitle_ = running_ ? L"Restarting..." : L"Starting...";
+        InvalidateRect(hwnd_, &banner_, TRUE);
+        TheSidecar().Call("start", {{"config", config}}, [this, config](const json&, const std::string& error) {
+            if (error.empty()) {
+                applied_ = config;
             }
+            SettingsChanged();
         });
     }
 
     void ShowState(const json& status) {
-        bool running = status.value("running", false);
-        EnableWindow(start_, !running);
-        EnableWindow(stop_, running);
-        std::wstring error = JsonText(status, "error");
-        if (running) {
-            std::wstring host = JsonText(status, "host");
-            std::wstring text = L"Running.\nIMAP " + host + L":" + std::to_wstring(status.value("imapPort", 0));
-            if (status.value("imapsPort", 0)) {
-                text += L"   IMAPS " + host + L":" + std::to_wstring(status.value("imapsPort", 0));
-            }
-            if (status.value("smtpPort", 0)) {
-                text += L"\nSMTP " + host + L":" + std::to_wstring(status.value("smtpPort", 0));
-            }
-            if (status.contains("restUrl")) {
-                text += L"   REST " + JsonText(status, "restUrl");
-            }
-            SetWindowTextW(state_, text.c_str());
-        } else if (!error.empty()) {
-            SetWindowTextW(state_, (L"Stopped: " + error).c_str());
+        status_ = status;
+        running_ = status.value("running", false);
+        SetWindowTextW(toggle_, running_ ? L"&Stop" : L"&Start");
+        SettingsChanged();
+        if (status.contains("restUrl")) {
+            SetWindowTextW(restUrl_, JsonText(status, "restUrl").c_str());
         } else {
-            SetWindowTextW(state_, L"Stopped.");
+            SetWindowTextW(restUrl_, L"(when the REST API runs)");
         }
     }
 
-    HWND listenersGroup_ = nullptr, restGroup_ = nullptr, usersGroup_ = nullptr, extensionsGroup_ = nullptr, quirksGroup_ = nullptr;
-    std::vector<HWND> labels_, edits_;
-    HWND restEnabled_ = nullptr;
-    HWND users_list_ = nullptr, userAdd_ = nullptr, userEdit_ = nullptr, userRemove_ = nullptr;
-    HWND scriptLabel_ = nullptr, scriptLoad_ = nullptr, scriptClear_ = nullptr;
-    HWND start_ = nullptr, stop_ = nullptr, export_ = nullptr, import_ = nullptr, reset_ = nullptr, state_ = nullptr;
-    HWND pluginsList_ = nullptr, quirksList_ = nullptr, help_ = nullptr;
+    void UpdateBanner() {
+        std::wstring error = JsonText(status_, "error");
+        if (running_) {
+            bannerColor_ = RGB(40, 180, 70);
+            bannerTitle_ = L"Running";
+            std::wstring host = JsonText(status_, "host");
+            bannerDetail_ = L"IMAP " + host + L":" + std::to_wstring(status_.value("imapPort", 0));
+            if (status_.value("imapsPort", 0)) {
+                bannerDetail_ += L"  ·  IMAPS " + std::to_wstring(status_.value("imapsPort", 0));
+            }
+            if (status_.value("smtpPort", 0)) {
+                bannerDetail_ += L"  ·  SMTP " + std::to_wstring(status_.value("smtpPort", 0));
+            }
+            if (status_.value("restPort", 0)) {
+                bannerDetail_ += L"  ·  REST " + std::to_wstring(status_.value("restPort", 0));
+            }
+            if (changed_) {
+                bannerTitle_ = L"Running, settings changed";
+                bannerDetail_ = L"Apply the changes to restart the server with them. Connected clients are disconnected.";
+            }
+        } else if (!error.empty()) {
+            bannerColor_ = RGB(210, 50, 40);
+            bannerTitle_ = L"Could not start";
+            bannerDetail_ = error;
+        } else {
+            bannerColor_ = RGB(160, 160, 160);
+            bannerTitle_ = L"Stopped";
+            bannerDetail_ = L"Start the server to accept IMAP and SMTP connections.";
+        }
+        InvalidateRect(hwnd_, &banner_, TRUE);
+    }
+
+    // what to type into an email client, from the ports the server runs on (or will run on)
+    void UpdateClientSettings() {
+        json config = ReadConfig();
+        bool live = running_ && !changed_;
+        std::wstring host = ClientHost(live ? JsonText(status_, "host") : Widen(config.value("host", "")));
+        int imap = live ? status_.value("imapPort", 0) : config.value("imapPort", 0);
+        int imaps = live ? status_.value("imapsPort", 0) : config.value("imapsPort", 0);
+        int smtp = live ? status_.value("smtpPort", 0) : config.value("smtpPort", 0);
+        std::wstring text;
+        if (!running_) {
+            text += L"(the server is stopped)\r\n\r\n";
+        }
+        text += L"Incoming mail (IMAP)\r\n  Server: " + host + L"\r\n  Port: " + std::to_wstring(imap) + L", security STARTTLS";
+        if (imaps) {
+            text += L"\r\n  or port " + std::to_wstring(imaps) + L", security SSL/TLS";
+        }
+        if (smtp) {
+            text += L"\r\n\r\nOutgoing mail (SMTP)\r\n  Server: " + host + L"\r\n  Port: " + std::to_wstring(smtp) +
+                    L", STARTTLS, any user name and password";
+        }
+        if (!users_.empty()) {
+            text += L"\r\n\r\nUser name: " + users_[0].name + L"\r\nPassword: " + users_[0].password;
+        }
+        text += L"\r\n\r\nThe certificate is self-signed for localhost, the email client has to accept it.";
+        SetWindowTextW(clientSettings_, text.c_str());
+    }
+
+    HWND toggle_ = nullptr, apply_ = nullptr;
+    HWND connectionGroup_ = nullptr, hostLabel_ = nullptr, host_ = nullptr, imapLabel_ = nullptr, imapPort_ = nullptr;
+    HWND imapsOn_ = nullptr, imapsPort_ = nullptr, smtpOn_ = nullptr, smtpPort_ = nullptr;
+    HWND usersGroup_ = nullptr, usersList_ = nullptr, userAdd_ = nullptr, userEdit_ = nullptr, userRemove_ = nullptr;
+    HWND clientGroup_ = nullptr, clientSettings_ = nullptr, copySettings_ = nullptr;
+    HWND advanced_ = nullptr;
+    HWND pluginsHint_ = nullptr, pluginsList_ = nullptr, pluginHelp_ = nullptr, pluginDefaults_ = nullptr;
+    HWND quirksHint_ = nullptr, quirksList_ = nullptr, quirkHelp_ = nullptr;
+    HWND scriptsHint_ = nullptr, scriptRules_ = nullptr, scriptLoad_ = nullptr, scriptClear_ = nullptr, scriptDocs_ = nullptr;
+    HWND restHint_ = nullptr, restEnabled_ = nullptr, restPortLabel_ = nullptr, restPort_ = nullptr, restTokenLabel_ = nullptr;
+    HWND restToken_ = nullptr, restUrlLabel_ = nullptr, restUrl_ = nullptr, restCopy_ = nullptr, restDocs_ = nullptr;
+    std::vector<HWND> tabs_[TAB_COUNT];
+
+    RECT banner_ = {};
+    std::wstring bannerTitle_ = L"Starting...";
+    std::wstring bannerDetail_;
+    COLORREF bannerColor_ = RGB(160, 160, 160);
+
     json plugins_ = json::array();
     json quirks_ = json::array();
+    json defaults_ = json::object();
     json script_ = json::array();
+    json status_ = json::object();
+    // the settings the server runs with, edits that differ wait for Apply
+    json applied_ = json::object();
     std::vector<User> users_;
     std::string restHost_ = "127.0.0.1";
+    bool running_ = false;
+    bool changed_ = false;
+    bool loading_ = false;
 };
 
 }  // namespace

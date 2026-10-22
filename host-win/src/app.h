@@ -60,6 +60,10 @@ void AddColumns(HWND list, std::initializer_list<Column> columns);
 // shows a context menu at the mouse, or under `anchor` (client coordinates of `control`) when the menu key was used,
 // and destroys it. The commands go to `owner`
 void TrackContextMenu(HMENU menu, HWND owner, HWND control, POINT at, RECT anchor);
+// a gray hint in the middle of a list view while it has no items, e.g. what to do to fill it
+void SetEmptyText(HWND list, const std::wstring& text);
+// draws a group-box-like etched frame, for areas a page paints itself
+void DrawEtchedFrame(HDC dc, RECT rect);
 
 // ---- dialogs and the clipboard (dialog.cpp) ----
 
