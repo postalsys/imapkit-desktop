@@ -8,6 +8,14 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+
+// GDI+ uses min and max, which NOMINMAX keeps out of the Windows headers
+namespace Gdiplus {
+using std::max;
+using std::min;
+}  // namespace Gdiplus
+#include <objidl.h>
+#include <gdiplus.h>
 #include <unordered_map>
 
 namespace {
@@ -895,37 +903,40 @@ private:
         return CallWindowProcW(listProc_, list, message, wParam, lParam);
     }
 
-    // a paperclip in the middle of a cell, drawn with lines so it has no background and scales with the DPI
+    // a paperclip in the middle of a cell, in the classic outline shape at 45 degrees: one wire with two nested
+    // bends and both ends open. Drawn antialiased with lines, so it has no background and scales with the DPI
     static void DrawPaperclip(HDC dc, const RECT& cell, COLORREF color) {
-        // the clip in a 16 by 16 grid: inner leg, small bend, right leg, top bend, outer leg, bottom bend
-        std::vector<POINT> points;
-        double unit = Scale(16) / 16.0;
-        double cx = (cell.left + cell.right) / 2.0;
-        double cy = (cell.top + cell.bottom) / 2.0;
-        // tilted like the paperclip glyph of Windows
-        const double tilt = 0.3;
-        auto add = [&](double x, double y) {
-            double dx = (x - 8) * unit;
-            double dy = (y - 8) * unit;
-            points.push_back({static_cast<LONG>(cx + dx * cos(tilt) - dy * sin(tilt) + 0.5), static_cast<LONG>(cy + dx * sin(tilt) + dy * cos(tilt) + 0.5)});
+        // the centerline in a 512 by 512 box, in coordinates along the clip (u, toward the top right) and across it
+        // (v): u = x - y, v = x + y. Four legs at v = 315, 425, 580 and 695
+        std::vector<Gdiplus::PointF> points;
+        const double scale = Scale(16) / 512.0;
+        const double cx = (cell.left + cell.right) / 2.0;
+        const double cy = (cell.top + cell.bottom) / 2.0;
+        auto add = [&](double u, double v) {
+            double x = (u + v) / 2;
+            double y = (v - u) / 2;
+            points.emplace_back(static_cast<Gdiplus::REAL>(cx + (x - 256) * scale), static_cast<Gdiplus::REAL>(cy + (y - 256) * scale));
         };
-        auto arc = [&](double x, double y, double radius, double from, double to) {
-            for (int i = 0; i <= 8; i++) {
-                double angle = from + (to - from) * i / 8;
-                add(x + radius * cos(angle), y + radius * sin(angle));
+        auto bend = [&](double u, double v, double radius, double from, double to) {
+            for (int i = 0; i <= 16; i++) {
+                double angle = from + (to - from) * i / 16;
+                add(u + radius * sin(angle), v + radius * cos(angle));
             }
         };
         const double pi = 3.14159265358979;
-        add(8, 6);
-        arc(9.25, 10, 1.25, pi, 0);
-        arc(8, 3.5, 2.5, 0, -pi);
-        arc(7.5, 12.5, 2, pi, 0);
-        LOGBRUSH brush = {BS_SOLID, color, 0};
-        HPEN pen = ExtCreatePen(PS_GEOMETRIC | PS_SOLID | PS_ENDCAP_ROUND | PS_JOIN_ROUND, std::max(1, static_cast<int>(unit * 1.2 + 0.5)), &brush, 0, nullptr);
-        HGDIOBJ old = SelectObject(dc, pen);
-        Polyline(dc, points.data(), static_cast<int>(points.size()));
-        SelectObject(dc, old);
-        DeleteObject(pen);
+        // the open outer end, down to the big bottom bend, up the outer leg, over the top bend, down to the small
+        // bend and up to the open inner end
+        add(295, 695);
+        bend(-265, 505, 190, 0, -pi);
+        bend(297.5, 447.5, 132.5, pi, 0);
+        bend(-202, 502.5, 77.5, 0, -pi);
+        add(195, 425);
+
+        Gdiplus::Graphics graphics(dc);
+        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        Gdiplus::Pen pen(Gdiplus::Color(255, GetRValue(color), GetGValue(color), GetBValue(color)), static_cast<Gdiplus::REAL>(std::max(1.0, 30 * scale)));
+        pen.SetLineJoin(Gdiplus::LineJoinRound);
+        graphics.DrawLines(&pen, points.data(), static_cast<INT>(points.size()));
     }
 
     // "name (size)", and "embedded" for an image that the HTML shows

@@ -3,6 +3,15 @@
 
 #include <objbase.h>
 
+#include <algorithm>
+
+// GDI+ uses min and max, which NOMINMAX keeps out of the Windows headers
+namespace Gdiplus {
+using std::max;
+using std::min;
+}  // namespace Gdiplus
+#include <gdiplus.h>
+
 #define WIDEN2(text) L##text
 #define WIDEN(text) WIDEN2(text)
 #define APP_VERSION_W WIDEN(APP_VERSION)
@@ -208,6 +217,10 @@ void SetStatus(StatusPart part, const std::wstring& text) {
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     // WebView2 needs a single threaded apartment
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    // GDI+ draws the antialiased paperclip of the message list
+    ULONG_PTR gdiplus = 0;
+    Gdiplus::GdiplusStartupInput gdiplusInput;
+    Gdiplus::GdiplusStartup(&gdiplus, &gdiplusInput, nullptr);
     INITCOMMONCONTROLSEX controls = {sizeof(controls), ICC_WIN95_CLASSES | ICC_TAB_CLASSES | ICC_BAR_CLASSES};
     InitCommonControlsEx(&controls);
 
@@ -246,6 +259,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+    Gdiplus::GdiplusShutdown(gdiplus);
     CoUninitialize();
     return 0;
 }

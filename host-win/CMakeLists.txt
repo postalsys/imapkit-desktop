@@ -49,7 +49,7 @@ target_compile_options(ImapKitDesktop PRIVATE /W4 /utf-8 /permissive-)
 target_link_libraries(ImapKitDesktop PRIVATE
     nlohmann_json::nlohmann_json
     ${WEBVIEW2_DIR}/build/native/x64/WebView2LoaderStatic.lib
-    comctl32 comdlg32 crypt32 shlwapi shell32 ole32 version
+    comctl32 comdlg32 gdiplus shlwapi shell32 ole32 version
 )
 # the manifest comes from app.rc
 target_link_options(ImapKitDesktop PRIVATE /MANIFEST:NO)
