@@ -22,6 +22,9 @@ BUILD_ONLY="${BUILD_ONLY:-no}"
 VERSION=$(node -p 'require("./package.json").version')
 TAG="v${VERSION}"
 SETUP="ImapKitDesktop-Setup-${VERSION}.exe"
+# the same setup under a name that stays, so https://github.com/<repo>/releases/latest/download/ImapKitDesktop-Setup.exe
+# always downloads the latest release (the download links of imapkit.com)
+LATEST_SETUP="ImapKitDesktop-Setup.exe"
 
 fail() {
     echo "$*" >&2
@@ -49,6 +52,7 @@ gpg --clearsign --default-key "$GPG_KEY" --output /dev/null package.json
 ./scripts/build-installer.sh
 
 cd dist
+cp "$SETUP" "$LATEST_SETUP"
 {
     echo "ImapKit Desktop ${VERSION} (https://github.com/${REPO})"
     echo ""
@@ -57,7 +61,7 @@ cd dist
     echo ""
     echo "Built from $(git rev-parse --short HEAD)"
     echo ""
-    openssl sha256 "$SETUP"
+    openssl sha256 "$SETUP" "$LATEST_SETUP"
 } >hashes.txt
 gpg --clearsign --default-key "$GPG_KEY" hashes.txt
 mv hashes.txt.asc hashes.txt
@@ -65,11 +69,11 @@ mv hashes.txt.asc hashes.txt
 gpg --verify --status-fd 1 hashes.txt 2>/dev/null | grep -q "^\[GNUPG:\] VALIDSIG [0-9A-F]*${GPG_KEY} " || fail "hashes.txt is not signed with ${GPG_KEY}"
 
 if [ "$BUILD_ONLY" = "yes" ]; then
-    echo "Built dist/${SETUP} and dist/hashes.txt, nothing uploaded"
+    echo "Built dist/${SETUP}, dist/${LATEST_SETUP} and dist/hashes.txt, nothing uploaded"
     exit 0
 fi
 
-gh release upload "$TAG" "$SETUP" hashes.txt --repo "$REPO" --clobber
+gh release upload "$TAG" "$SETUP" "$LATEST_SETUP" hashes.txt --repo "$REPO" --clobber
 # the draft becomes the latest release now that its installer is there
 gh release edit "$TAG" --repo "$REPO" --draft=false --latest
 echo "Published ${TAG}: https://github.com/${REPO}/releases/tag/${TAG}"
