@@ -57,7 +57,9 @@ enum ControlId {
     IDC_SMTP_REJECT_REMOVE,
 };
 
-enum AdvancedTab { TAB_EXTENSIONS, TAB_ID, TAB_LIMITS, TAB_QUIRKS, TAB_SCRIPTS, TAB_SMTP, TAB_REST, TAB_COUNT };
+// the IMAP extensions, then what changes how the server answers: limits and the ID response, faults on purpose (quirk
+// presets and script rules), the SMTP server's rules, and the REST API for test suites
+enum AdvancedTab { TAB_EXTENSIONS, TAB_LIMITS, TAB_FAULTS, TAB_SMTP, TAB_REST, TAB_COUNT };
 
 // the fields of the ID response that RFC 2971 section 3.3 defines
 const char* kIdFields[] = {"name", "version", "os", "os-version", "vendor", "support-url", "address", "date", "command", "arguments", "environment"};
@@ -161,7 +163,7 @@ protected:
         copySettings_ = AddControl(L"BUTTON", L"&Copy", WS_TABSTOP, IDC_COPY_SETTINGS);
 
         advanced_ = AddControl(WC_TABCONTROLW, L"", WS_TABSTOP | WS_CLIPSIBLINGS, IDC_ADVANCED);
-        const wchar_t* tabNames[] = {L"IMAP Extensions", L"Server ID", L"Limits", L"Quirks", L"Fault Scripts", L"SMTP", L"REST API"};
+        const wchar_t* tabNames[] = {L"Extensions", L"Limits && ID", L"Faults", L"SMTP", L"REST API"};
         for (int i = 0; i < TAB_COUNT; i++) {
             TCITEMW item = {};
             item.mask = TCIF_TEXT;
@@ -170,75 +172,69 @@ protected:
         }
 
         auto& extensions = tabs_[TAB_EXTENSIONS];
-        extensions.push_back(pluginsHint_ = AddControl(L"STATIC", L"The capabilities the server advertises. Turn off what a client must cope without.",
-                                                       SS_LEFT, 0));
-        extensions.push_back(pluginsList_ = AddCheckList(IDC_PLUGINS));
+        extensions.push_back(pluginsHint_ = AddControl(L"STATIC", L"The IMAP capabilities the server advertises. Turn off what a client must cope without.",
+                                                       SS_LEFT | SS_ENDELLIPSIS, 0));
+        extensions.push_back(pluginsList_ = AddCheckList(IDC_PLUGINS, true));
         extensions.push_back(pluginHelp_ = AddControl(L"STATIC", L"Select an extension to see what it does.", SS_LEFT, IDC_PLUGIN_HELP, WS_EX_STATICEDGE));
         extensions.push_back(pluginDefaults_ = AddControl(L"BUTTON", L"Restore &Defaults", WS_TABSTOP, IDC_PLUGIN_DEFAULTS));
 
-        auto& id = tabs_[TAB_ID];
-        id.push_back(idHint_ = AddControl(L"STATIC",
-                                          L"What the server answers to the ID command of a client (RFC 2971). Clients may change "
-                                          L"what they do for a server they know.",
-                                          SS_LEFT, 0));
-        id.push_back(idEnabled_ = AddControl(L"BUTTON", L"Answer ID with these &values (empty fields are left out), not with ID NIL",
-                                             WS_TABSTOP | BS_AUTOCHECKBOX, IDC_ID_ENABLED));
-        for (int i = 0; i < kIdFieldCount; i++) {
-            id.push_back(idLabels_[i] = AddControl(L"STATIC", (Widen(kIdFields[i]) + L":").c_str(), SS_LEFT, 0));
-            id.push_back(idEdits_[i] = AddControl(L"EDIT", L"", WS_TABSTOP | ES_AUTOHSCROLL, IDC_ID_FIELD + i, WS_EX_CLIENTEDGE));
-        }
-
         auto& limits = tabs_[TAB_LIMITS];
-        limits.push_back(limitsHint_ = AddControl(L"STATIC",
-                                                  L"Limits make the server refuse what goes over them, to test how a client copes. "
-                                                  L"An empty field sets no limit. Most need their extension turned on.",
-                                                  SS_LEFT, 0));
+        limits.push_back(limitsTabHint_ = AddControl(L"STATIC", L"How far the IMAP server lets a client go, and what it says about itself.",
+                                                     SS_LEFT | SS_ENDELLIPSIS, 0));
+        limits.push_back(limitsGroup_ = AddControl(L"BUTTON", L"Limits", BS_GROUPBOX, 0));
+        limits.push_back(limitsHint_ = AddControl(L"STATIC", L"An empty field sets no limit. Going over one gets the error a real server sends.",
+                                                  SS_LEFT | SS_ENDELLIPSIS, 0));
         for (int i = 0; i < kLimitCount; i++) {
             limits.push_back(limitLabels_[i] = AddControl(L"STATIC", kLimits[i].label, SS_LEFT, 0));
             limits.push_back(limitEdits_[i] = AddControl(L"EDIT", L"", WS_TABSTOP | ES_NUMBER | ES_AUTOHSCROLL, IDC_LIMIT_FIELD + i, WS_EX_CLIENTEDGE));
             limits.push_back(limitNotes_[i] = AddControl(L"STATIC", kLimits[i].unit, SS_LEFT | SS_ENDELLIPSIS, 0));
         }
-        limits.push_back(quotaSoft_ = AddControl(L"BUTTON", L"Quota only &warns (soft limit, an untagged NO [OVERQUOTA])", WS_TABSTOP | BS_AUTOCHECKBOX,
-                                                 IDC_QUOTA_SOFT));
+        limits.push_back(quotaSoft_ = AddControl(L"BUTTON", L"Quota only &warns (an untagged NO [OVERQUOTA], the command still succeeds)",
+                                                 WS_TABSTOP | BS_AUTOCHECKBOX, IDC_QUOTA_SOFT));
+        limits.push_back(idGroup_ = AddControl(L"BUTTON", L"ID response (RFC 2971)", BS_GROUPBOX, 0));
+        limits.push_back(idEnabled_ = AddControl(L"BUTTON", L"Answer ID with these &values instead of ID NIL (empty fields are left out)",
+                                                 WS_TABSTOP | BS_AUTOCHECKBOX, IDC_ID_ENABLED));
+        for (int i = 0; i < kIdFieldCount; i++) {
+            limits.push_back(idLabels_[i] = AddControl(L"STATIC", (Widen(kIdFields[i]) + L":").c_str(), SS_LEFT, 0));
+            limits.push_back(idEdits_[i] = AddControl(L"EDIT", L"", WS_TABSTOP | ES_AUTOHSCROLL, IDC_ID_FIELD + i, WS_EX_CLIENTEDGE));
+        }
+
+        auto& faults = tabs_[TAB_FAULTS];
+        faults.push_back(faultsHint_ = AddControl(L"STATIC", L"Make the server misbehave on purpose, to test how a client copes.", SS_LEFT | SS_ENDELLIPSIS, 0));
+        faults.push_back(quirksGroup_ = AddControl(L"BUTTON", L"Quirks of known servers", BS_GROUPBOX, 0));
+        faults.push_back(quirksList_ = AddCheckList(IDC_QUIRKS));
+        faults.push_back(quirkHelp_ = AddControl(L"STATIC", L"Select a quirk to see what it does.", SS_LEFT, IDC_QUIRK_HELP, WS_EX_STATICEDGE));
+        faults.push_back(scriptsGroup_ = AddControl(L"BUTTON", L"Script rules", BS_GROUPBOX, 0));
+        faults.push_back(scriptRules_ = AddControl(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL,
+                                                   IDC_SCRIPT_RULES, WS_EX_CLIENTEDGE));
+        AddColumns(scriptRules_, {{L"", 900}});
+        SendMessageW(scriptRules_, WM_SETFONT, reinterpret_cast<WPARAM>(MonoFont()), TRUE);
+        SetEmptyText(scriptRules_, L"No script rules. Load a JSON file with rules that refuse or delay commands, cut responses short or drop "
+                                   L"the connection.");
+        faults.push_back(scriptLoad_ = AddControl(L"BUTTON", L"L&oad...", WS_TABSTOP, IDC_SCRIPT_LOAD));
+        faults.push_back(scriptClear_ = AddControl(L"BUTTON", L"Clea&r", WS_TABSTOP, IDC_SCRIPT_CLEAR));
+        faults.push_back(scriptDocs_ = AddControl(L"BUTTON", L"Rule &Reference", WS_TABSTOP, IDC_SCRIPT_DOCS));
 
         auto& smtp = tabs_[TAB_SMTP];
-        smtp.push_back(smtpHint_ = AddControl(L"STATIC", L"Rules of the SMTP server, to test how a client handles refused mail.", SS_LEFT, 0));
-        smtp.push_back(smtpRequireAuth_ = AddControl(L"BUTTON", L"Require a &login to send mail (530 without, so no mail counts as incoming)",
+        smtp.push_back(smtpHint_ = AddControl(L"STATIC", L"Rules of the SMTP server, to test how a client handles refused mail.", SS_LEFT | SS_ENDELLIPSIS, 0));
+        smtp.push_back(smtpRequireAuth_ = AddControl(L"BUTTON", L"Require a &login to send mail (530 without one, so no mail counts as incoming)",
                                                      WS_TABSTOP | BS_AUTOCHECKBOX, IDC_SMTP_REQUIRE_AUTH));
         smtp.push_back(smtpMaxSizeLabel_ = AddControl(L"STATIC", L"Largest message:", SS_LEFT, 0));
         smtp.push_back(smtpMaxSize_ = AddControl(L"EDIT", L"", WS_TABSTOP | ES_NUMBER | ES_AUTOHSCROLL, IDC_SMTP_MAX_SIZE, WS_EX_CLIENTEDGE));
-        smtp.push_back(smtpMaxSizeNote_ = AddControl(L"STATIC", L"bytes, advertised with SIZE, larger mail gets 552. Empty: any size", SS_LEFT | SS_ENDELLIPSIS, 0));
+        smtp.push_back(smtpMaxSizeNote_ = AddControl(L"STATIC", L"bytes, empty for any size. Advertised with SIZE, larger mail gets 552.",
+                                                     SS_LEFT | SS_ENDELLIPSIS, 0));
+        smtp.push_back(smtpRejectGroup_ = AddControl(L"BUTTON", L"Rejected recipients", BS_GROUPBOX, 0));
         smtp.push_back(smtpRejectLabel_ = AddControl(L"STATIC",
-                                                     L"Rejected recipients: RCPT TO for a matching address gets the reply code and text. "
-                                                     L"* in an address matches anything. Double-click a cell to edit it.",
-                                                     SS_LEFT, 0));
+                                                     L"RCPT TO for a matching address gets the reply code and text, * matches anything. "
+                                                     L"Double-click a cell to edit it.",
+                                                     SS_LEFT | SS_ENDELLIPSIS, 0));
         smtp.push_back(smtpReject_ = AddControl(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS, IDC_SMTP_REJECT,
                                                 WS_EX_CLIENTEDGE));
         ListView_SetExtendedListViewStyle(smtpReject_, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
         AddColumns(smtpReject_, {{L"Address", 200}, {L"Code", 50}, {L"Reply text", 200}});
-        SetEmptyText(smtpReject_, L"No rejected recipients, every address is accepted. Add one to refuse it.");
+        SetEmptyText(smtpReject_, L"No rejected recipients, every address is accepted. Add a row to refuse one.");
         smtp.push_back(smtpRejectAdd_ = AddControl(L"BUTTON", L"Add &Row", WS_TABSTOP, IDC_SMTP_REJECT_ADD));
         smtp.push_back(smtpRejectRemove_ = AddControl(L"BUTTON", L"Remo&ve Row", WS_TABSTOP, IDC_SMTP_REJECT_REMOVE));
-
-        auto& quirks = tabs_[TAB_QUIRKS];
-        quirks.push_back(quirksHint_ = AddControl(L"STATIC", L"Make the server behave like a known real server, to test how a client copes with it.",
-                                                  SS_LEFT, 0));
-        quirks.push_back(quirksList_ = AddCheckList(IDC_QUIRKS));
-        quirks.push_back(quirkHelp_ = AddControl(L"STATIC", L"Select a quirk to see what it does.", SS_LEFT, IDC_QUIRK_HELP, WS_EX_STATICEDGE));
-
-        auto& scripts = tabs_[TAB_SCRIPTS];
-        scripts.push_back(scriptsHint_ = AddControl(L"STATIC",
-                                                    L"Script rules make the server misbehave on purpose: refuse or delay a command, cut a response short, "
-                                                    L"drop the connection. Load them from a JSON file.",
-                                                    SS_LEFT, 0));
-        scripts.push_back(scriptRules_ = AddControl(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL,
-                                                    IDC_SCRIPT_RULES, WS_EX_CLIENTEDGE));
-        AddColumns(scriptRules_, {{L"", 900}});
-        SendMessageW(scriptRules_, WM_SETFONT, reinterpret_cast<WPARAM>(MonoFont()), TRUE);
-        SetEmptyText(scriptRules_, L"No script rules, the server follows the protocol.");
-        scripts.push_back(scriptLoad_ = AddControl(L"BUTTON", L"L&oad...", WS_TABSTOP, IDC_SCRIPT_LOAD));
-        scripts.push_back(scriptClear_ = AddControl(L"BUTTON", L"Clea&r", WS_TABSTOP, IDC_SCRIPT_CLEAR));
-        scripts.push_back(scriptDocs_ = AddControl(L"BUTTON", L"Rule &Reference", WS_TABSTOP, IDC_SCRIPT_DOCS));
 
         auto& rest = tabs_[TAB_REST];
         rest.push_back(restHint_ = AddControl(L"STATIC",
@@ -459,11 +455,14 @@ protected:
     }
 
 private:
-    HWND AddCheckList(int id) {
-        HWND list = AddControl(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOCOLUMNHEADER, id,
-                               WS_EX_CLIENTEDGE);
+    // a list of names with check boxes; `columns` flows a long list into columns (LVS_LIST) instead of one long scroll
+    HWND AddCheckList(int id, bool columns = false) {
+        DWORD view = columns ? LVS_LIST : LVS_REPORT | LVS_NOCOLUMNHEADER;
+        HWND list = AddControl(WC_LISTVIEWW, L"", WS_TABSTOP | view | LVS_SINGLESEL | LVS_SHOWSELALWAYS, id, WS_EX_CLIENTEDGE);
         ListView_SetExtendedListViewStyle(list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT);
-        AddColumns(list, {{L"", 160}});
+        if (!columns) {
+            AddColumns(list, {{L"", 160}});
+        }
         return list;
     }
 
@@ -475,93 +474,125 @@ private:
         }
     }
 
-    // limits: hint, a row per limit with its unit and whether its extension is on, the soft quota switch
+    // a group box around rows of controls: its caption, and the inner area where the rows go
+    RECT PlaceGroup(HWND group, int left, int top, int width, int height) {
+        MoveWindow(group, left, top, width, height, TRUE);
+        int inset = Scale(10);
+        return {left + inset, top + Scale(20), left + width - inset, top + height - Scale(8)};
+    }
+
+    // Limits & ID: the limits with their units and whether their extension is on, then the ID response
     void LayoutLimitsTab(const RECT& area) {
         int width = area.right - area.left;
         int pad = Scale(6);
         int label = Scale(kRowLabel);
         int field = Scale(kRowEdit);
-        int hint = Scale(30);
-        MoveWindow(limitsHint_, area.left, area.top, width, hint, TRUE);
+        int row = Scale(27);
+        MoveWindow(limitsTabHint_, area.left, area.top, width, Scale(18), TRUE);
+        int top = area.top + Scale(18) + pad;
+
+        int limitsHeight = Scale(20) + Scale(22) + kLimitCount * row + Scale(26) + Scale(8);
+        RECT inner = PlaceGroup(limitsGroup_, area.left, top, width, limitsHeight);
+        int innerWidth = inner.right - inner.left;
+        MoveWindow(limitsHint_, inner.left, inner.top, innerWidth, Scale(16), TRUE);
         for (int i = 0; i < kLimitCount; i++) {
-            int y = area.top + hint + pad + i * Scale(27);
-            MoveWindow(limitLabels_[i], area.left, y + Scale(3), label, Scale(16), TRUE);
-            MoveWindow(limitEdits_[i], area.left + label, y, field, Scale(21), TRUE);
-            MoveWindow(limitNotes_[i], area.left + label + field + pad, y + Scale(3), std::max(0, width - label - field - pad), Scale(16), TRUE);
+            int y = inner.top + Scale(22) + i * row;
+            MoveWindow(limitLabels_[i], inner.left, y + Scale(3), label, Scale(16), TRUE);
+            MoveWindow(limitEdits_[i], inner.left + label, y, field, Scale(21), TRUE);
+            MoveWindow(limitNotes_[i], inner.left + label + field + pad, y + Scale(3), std::max(0, innerWidth - label - field - pad), Scale(16), TRUE);
         }
-        MoveWindow(quotaSoft_, area.left, area.top + hint + pad + kLimitCount * Scale(27) + Scale(4), width, Scale(20), TRUE);
+        MoveWindow(quotaSoft_, inner.left, inner.top + Scale(22) + kLimitCount * row, innerWidth, Scale(20), TRUE);
+        top += limitsHeight + pad;
+
+        // the ID fields in two columns when there is room
+        int columns = width >= Scale(330) ? 2 : 1;
+        int rows = (kIdFieldCount + columns - 1) / columns;
+        int idHeight = Scale(20) + Scale(28) + rows * row + Scale(4);
+        inner = PlaceGroup(idGroup_, area.left, top, width, idHeight);
+        innerWidth = inner.right - inner.left;
+        MoveWindow(idEnabled_, inner.left, inner.top, innerWidth, Scale(20), TRUE);
+        int columnWidth = (innerWidth - (columns - 1) * 3 * pad) / columns;
+        int idLabel = Scale(width >= Scale(520) ? 80 : 70);
+        for (int i = 0; i < kIdFieldCount; i++) {
+            int x = inner.left + (i / rows) * (columnWidth + 3 * pad);
+            int y = inner.top + Scale(28) + (i % rows) * row;
+            MoveWindow(idLabels_[i], x, y + Scale(3), idLabel, Scale(16), TRUE);
+            MoveWindow(idEdits_[i], x + idLabel, y, columnWidth - idLabel, Scale(21), TRUE);
+        }
     }
 
-    // SMTP: hint, login switch, size, rejected recipients filling the rest
+    // Faults: the quirk presets with the description of the selected one, the script rules with their buttons
+    void LayoutFaultsTab(const RECT& area) {
+        int width = area.right - area.left;
+        int pad = Scale(6);
+        int helpHeight = Scale(48);
+        int buttons = Scale(25);
+        MoveWindow(faultsHint_, area.left, area.top, width, Scale(18), TRUE);
+        int top = area.top + Scale(18) + pad;
+        // the quirks are a handful of presets, the script rules get the larger part
+        int half = (area.bottom - top - pad) * 45 / 100;
+
+        RECT inner = PlaceGroup(quirksGroup_, area.left, top, width, half);
+        int innerWidth = inner.right - inner.left;
+        MoveWindow(quirksList_, inner.left, inner.top, innerWidth, std::max(Scale(40), static_cast<int>(inner.bottom - inner.top) - helpHeight - pad), TRUE);
+        MoveWindow(quirkHelp_, inner.left, inner.bottom - helpHeight, innerWidth, helpHeight, TRUE);
+        ListView_SetColumnWidth(quirksList_, 0, innerWidth - Scale(24));
+        top += half + pad;
+
+        inner = PlaceGroup(scriptsGroup_, area.left, top, width, area.bottom - top);
+        innerWidth = inner.right - inner.left;
+        MoveWindow(scriptRules_, inner.left, inner.top, innerWidth, std::max(Scale(40), static_cast<int>(inner.bottom - inner.top) - buttons - pad), TRUE);
+        StretchColumn(scriptRules_, 0);
+        MoveWindow(scriptLoad_, inner.left, inner.bottom - buttons, Scale(80), buttons, TRUE);
+        MoveWindow(scriptClear_, inner.left + Scale(80) + pad, inner.bottom - buttons, Scale(80), buttons, TRUE);
+        MoveWindow(scriptDocs_, inner.right - Scale(110), inner.bottom - buttons, Scale(110), buttons, TRUE);
+    }
+
+    // SMTP: the login switch and the size limit, the rejected recipients filling the rest
     void LayoutSmtpTab(const RECT& area) {
         int width = area.right - area.left;
         int pad = Scale(6);
         int label = Scale(kRowLabel);
         int field = Scale(kRowEdit);
         int y = area.top;
-        MoveWindow(smtpHint_, area.left, y, width, Scale(20), TRUE);
-        y += Scale(20) + pad;
+        MoveWindow(smtpHint_, area.left, y, width, Scale(18), TRUE);
+        y += Scale(18) + pad;
         MoveWindow(smtpRequireAuth_, area.left, y, width, Scale(20), TRUE);
         y += Scale(28);
         MoveWindow(smtpMaxSizeLabel_, area.left, y + Scale(3), label, Scale(16), TRUE);
         MoveWindow(smtpMaxSize_, area.left + label, y, field, Scale(21), TRUE);
         MoveWindow(smtpMaxSizeNote_, area.left + label + field + pad, y + Scale(3), std::max(0, width - label - field - pad), Scale(16), TRUE);
-        y += Scale(32);
-        MoveWindow(smtpRejectLabel_, area.left, y, width, Scale(30), TRUE);
-        y += Scale(32);
-        int buttons = Scale(25) + pad;
-        MoveWindow(smtpReject_, area.left, y, width, std::max(Scale(40), static_cast<int>(area.bottom) - y - buttons), TRUE);
+        y += Scale(21) + 2 * pad;
+
+        RECT inner = PlaceGroup(smtpRejectGroup_, area.left, y, width, area.bottom - y);
+        int innerWidth = inner.right - inner.left;
+        int buttons = Scale(25);
+        MoveWindow(smtpRejectLabel_, inner.left, inner.top, innerWidth, Scale(16), TRUE);
+        MoveWindow(smtpReject_, inner.left, inner.top + Scale(22), innerWidth, std::max(Scale(40), static_cast<int>(inner.bottom - inner.top) - Scale(22) - buttons - pad), TRUE);
         StretchColumn(smtpReject_, 2);
-        MoveWindow(smtpRejectAdd_, area.left, area.bottom - Scale(25), Scale(90), Scale(25), TRUE);
-        MoveWindow(smtpRejectRemove_, area.left + Scale(90) + pad, area.bottom - Scale(25), Scale(90), Scale(25), TRUE);
+        MoveWindow(smtpRejectAdd_, inner.left, inner.bottom - buttons, Scale(90), buttons, TRUE);
+        MoveWindow(smtpRejectRemove_, inner.left + Scale(90) + pad, inner.bottom - buttons, Scale(90), buttons, TRUE);
     }
 
     void LayoutTabs(const RECT& area) {
         int width = area.right - area.left;
         int pad = Scale(6);
         int button = Scale(110);
-        int hint = Scale(30);
+        int hint = Scale(18);
         int helpHeight = Scale(64);
 
         // extensions: hint, list, description, defaults
         MoveWindow(pluginsHint_, area.left, area.top, width, hint, TRUE);
         int listBottom = area.bottom - helpHeight - Scale(25) - 2 * pad;
-        MoveWindow(pluginsList_, area.left, area.top + hint, width, listBottom - area.top - hint, TRUE);
+        MoveWindow(pluginsList_, area.left, area.top + hint + pad, width, listBottom - area.top - hint - pad, TRUE);
         MoveWindow(pluginHelp_, area.left, listBottom + pad, width, helpHeight, TRUE);
         MoveWindow(pluginDefaults_, area.right - button, area.bottom - Scale(25), button, Scale(25), TRUE);
-        ListView_SetColumnWidth(pluginsList_, 0, width - Scale(24));
-
-        // server ID: hint, the switch, then the fields in two columns when there is room
-        MoveWindow(idHint_, area.left, area.top, width, hint, TRUE);
-        MoveWindow(idEnabled_, area.left, area.top + hint + pad, width, Scale(20), TRUE);
-        int columns = width >= Scale(520) ? 2 : 1;
-        int rows = (kIdFieldCount + columns - 1) / columns;
-        int columnWidth = (width - (columns - 1) * 3 * pad) / columns;
-        int idLabelWidth = Scale(80);
-        int fieldsTop = area.top + hint + pad + Scale(30);
-        for (int i = 0; i < kIdFieldCount; i++) {
-            int x = area.left + (i / rows) * (columnWidth + 3 * pad);
-            int y = fieldsTop + (i % rows) * Scale(27);
-            MoveWindow(idLabels_[i], x, y + Scale(3), idLabelWidth, Scale(16), TRUE);
-            MoveWindow(idEdits_[i], x + idLabelWidth, y, columnWidth - idLabelWidth, Scale(21), TRUE);
-        }
+        // in list view mode this is the width of every column of names
+        ListView_SetColumnWidth(pluginsList_, 0, Scale(175));
 
         LayoutLimitsTab(area);
+        LayoutFaultsTab(area);
         LayoutSmtpTab(area);
-
-        // quirks: hint, list, description
-        MoveWindow(quirksHint_, area.left, area.top, width, hint, TRUE);
-        MoveWindow(quirksList_, area.left, area.top + hint, width, area.bottom - helpHeight - pad - area.top - hint, TRUE);
-        MoveWindow(quirkHelp_, area.left, area.bottom - helpHeight, width, helpHeight, TRUE);
-        ListView_SetColumnWidth(quirksList_, 0, width - Scale(24));
-
-        // fault scripts: hint, rules, buttons
-        int scriptsHint = Scale(44);
-        MoveWindow(scriptsHint_, area.left, area.top, width, scriptsHint, TRUE);
-        MoveWindow(scriptRules_, area.left, area.top + scriptsHint, width, area.bottom - Scale(25) - pad - area.top - scriptsHint, TRUE);
-        MoveWindow(scriptLoad_, area.left, area.bottom - Scale(25), Scale(80), Scale(25), TRUE);
-        MoveWindow(scriptClear_, area.left + Scale(80) + pad, area.bottom - Scale(25), Scale(80), Scale(25), TRUE);
-        MoveWindow(scriptDocs_, area.right - button, area.bottom - Scale(25), button, Scale(25), TRUE);
 
         // REST API: hint, enable, port, token, address, reference
         int restHint = Scale(44);
@@ -930,7 +961,7 @@ private:
                 enabled = enabled || on.count(plugin);
             }
             if (!names.empty()) {
-                note += enabled ? L"  (" + names + L" is on)" : L"  (needs " + names + L", turn it on in IMAP Extensions)";
+                note += enabled ? L"  (" + names + L" is on)" : L"  (needs " + names + L", turn it on in Extensions)";
             }
             SetWindowTextW(limitNotes_[i], note.c_str());
         }
@@ -1052,14 +1083,14 @@ private:
     HWND clientGroup_ = nullptr, clientSettings_ = nullptr, copySettings_ = nullptr;
     HWND advanced_ = nullptr;
     HWND pluginsHint_ = nullptr, pluginsList_ = nullptr, pluginHelp_ = nullptr, pluginDefaults_ = nullptr;
-    HWND quirksHint_ = nullptr, quirksList_ = nullptr, quirkHelp_ = nullptr;
-    HWND scriptsHint_ = nullptr, scriptRules_ = nullptr, scriptLoad_ = nullptr, scriptClear_ = nullptr, scriptDocs_ = nullptr;
+    HWND faultsHint_ = nullptr, quirksGroup_ = nullptr, quirksList_ = nullptr, quirkHelp_ = nullptr;
+    HWND scriptsGroup_ = nullptr, scriptRules_ = nullptr, scriptLoad_ = nullptr, scriptClear_ = nullptr, scriptDocs_ = nullptr;
     HWND restHint_ = nullptr, restEnabled_ = nullptr, restPortLabel_ = nullptr, restPort_ = nullptr, restTokenLabel_ = nullptr;
     HWND restToken_ = nullptr, restUrlLabel_ = nullptr, restUrl_ = nullptr, restCopy_ = nullptr, restDocs_ = nullptr;
-    HWND idHint_ = nullptr, idEnabled_ = nullptr, idLabels_[kIdFieldCount] = {}, idEdits_[kIdFieldCount] = {};
+    HWND limitsTabHint_ = nullptr, limitsGroup_ = nullptr, idGroup_ = nullptr, idEnabled_ = nullptr, idLabels_[kIdFieldCount] = {}, idEdits_[kIdFieldCount] = {};
     HWND limitsHint_ = nullptr, limitLabels_[kLimitCount] = {}, limitEdits_[kLimitCount] = {}, limitNotes_[kLimitCount] = {}, quotaSoft_ = nullptr;
     HWND smtpHint_ = nullptr, smtpRequireAuth_ = nullptr, smtpMaxSizeLabel_ = nullptr, smtpMaxSize_ = nullptr, smtpMaxSizeNote_ = nullptr;
-    HWND smtpRejectLabel_ = nullptr, smtpReject_ = nullptr, smtpRejectAdd_ = nullptr, smtpRejectRemove_ = nullptr;
+    HWND smtpRejectGroup_ = nullptr, smtpRejectLabel_ = nullptr, smtpReject_ = nullptr, smtpRejectAdd_ = nullptr, smtpRejectRemove_ = nullptr;
     std::vector<RejectRow> rejects_;
     std::vector<HWND> tabs_[TAB_COUNT];
 
