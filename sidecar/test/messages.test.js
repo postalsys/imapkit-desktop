@@ -2,7 +2,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { previewDocument } from '../src/messages.js';
+import { previewDocument, parseMessage } from '../src/messages.js';
 
 describe('previewDocument', () => {
     // markup that could fool a search for the <head> of the message
@@ -24,5 +24,21 @@ describe('previewDocument', () => {
 
     it('escapes plain text messages', () => {
         assert.match(previewDocument({ textAsHtml: '<p>a &amp; b</p>' }), /<body><p>a &amp; b<\/p><\/body>/);
+    });
+
+    it('allows images from the network only when asked for', () => {
+        const html = '<img src="https://example.com/x.png">';
+        assert.match(previewDocument({ html }), /img-src data: cid:;/);
+        assert.match(previewDocument({ html }, true), /img-src data: cid: http: https:;/);
+    });
+});
+
+describe('parseMessage', () => {
+    const message = html => ({ uid: 1, flags: [], size: 1, raw: Buffer.from('Content-Type: text/html\r\n\r\n' + html + '\r\n') });
+
+    it('tells when the HTML refers to images on the network', async () => {
+        assert.strictEqual((await parseMessage(message('<img src="https://example.com/x.png">'))).remoteImages, true);
+        assert.strictEqual((await parseMessage(message('<td style="background:url(//example.com/bg.png)">'))).remoteImages, true);
+        assert.strictEqual((await parseMessage(message('<a href="https://example.com">link</a>'))).remoteImages, false);
     });
 });

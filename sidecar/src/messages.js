@@ -5,13 +5,18 @@ import { simpleParser } from 'mailparser';
 import addressparser from 'nodemailer/lib/addressparser/index.js';
 import MailComposer from 'nodemailer/lib/mail-composer/index.js';
 
-// the preview loads nothing from the network and runs no scripts, embedded images are data: URLs
-const CSP = "default-src 'none'; img-src data: cid:; style-src 'unsafe-inline' data:; font-src data:";
+// the preview loads nothing from the network and runs no scripts, embedded images are data: URLs. Remote images
+// load only when the user asks for them, a sender could tell from them when and where the message was read
+const policy = remoteImages =>
+    "default-src 'none'; img-src data: cid:" + (remoteImages ? ' http: https:' : '') + "; style-src 'unsafe-inline' data:; font-src data:";
 // email HTML is written for a white page, also when Windows uses dark mode
-const META =
+const meta = remoteImages =>
     '<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="' +
-    CSP +
+    policy(remoteImages) +
     '"><meta name="color-scheme" content="light"><style>:root{color-scheme:light}html{background:#fff;color:#000}</style>';
+const META = meta(false);
+// an image, a background or a CSS url() from the network
+const REMOTE_IMAGE = /\b(?:src|background|srcset)\s*=\s*["']?\s*(?:https?:)?\/\/|url\(\s*["']?\s*(?:https?:)?\/\//i;
 const BASE_STYLE = '<style>body{font:10pt Arial,sans-serif;margin:8px;}pre{white-space:pre-wrap;word-wrap:break-word;}</style>';
 const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
 
@@ -25,11 +30,12 @@ const document = body => '<!doctype html><html><head>' + META + BASE_STYLE + '</
  * that comes before it (looking for the <head> of the message could be fooled by comments, attributes or <header>)
  *
  * @param {Object} parsed A message of mailparser
+ * @param {Boolean} [remoteImages] true lets images from the network load
  * @return {String} document
  */
-export function previewDocument(parsed) {
+export function previewDocument(parsed, remoteImages = false) {
     if (typeof parsed.html === 'string' && parsed.html) {
-        return '<!doctype html><html><head>' + META + '</head><body>' + parsed.html + '</body></html>';
+        return '<!doctype html><html><head>' + meta(remoteImages) + '</head><body>' + parsed.html + '</body></html>';
     }
     // mailparser escapes the text and turns links into anchors
     return document(parsed.textAsHtml || '');
@@ -116,9 +122,11 @@ function listAttachments(parsed) {
  * Parses a message for the preview pane
  *
  * @param {Object} message A message of control.getMessage()
- * @return {Promise<Object>} headers, text, attachment list and the preview document
+ * @param {Boolean} [remoteImages] true lets images from the network load in the preview
+ * @return {Promise<Object>} headers, text, attachment list and the preview document. `remoteImages` tells whether the
+ *   HTML refers to images on the network, which the preview blocks unless they were asked for
  */
-export async function parseMessage(message) {
+export async function parseMessage(message, remoteImages = false) {
     const parsed = await simpleParser(message.raw, { skipImageLinks: false });
     return {
         uid: message.uid,
@@ -135,7 +143,8 @@ export async function parseMessage(message) {
             contentType: attachment.contentType,
             size: attachment.size
         })),
-        previewHtml: previewDocument(parsed)
+        remoteImages: typeof parsed.html === 'string' && REMOTE_IMAGE.test(parsed.html),
+        previewHtml: previewDocument(parsed, remoteImages)
     };
 }
 

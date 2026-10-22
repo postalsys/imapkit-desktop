@@ -2,7 +2,9 @@
 # WebView2 content is on screen), or of the whole desktop with -Desktop. -Page 0, 1 or 2 switches the app to the Server, Connections or Messages page first.
 # At full resolution also on scaled displays
 # -ListKeys "40,40" posts these virtual keys (40 is Down) to the visible list view of the page, to select a message.
-param([string]$Path, [switch]$Desktop, [int]$Page = -1, [string]$ListKeys = '')
+# -Resize "800x600,1120x760" resizes the window to these sizes in turn, -PageCommand 405 sends a WM_COMMAND with that
+# control id to the visible page (405 is a click on the info bar of the Messages page)
+param([string]$Path, [switch]$Desktop, [int]$Page = -1, [string]$ListKeys = '', [string]$Resize = '', [int]$PageCommand = -1)
 $Title = 'ImapKit Desktop'
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 Add-Type -Namespace Native -Name User32 -MemberDefinition @'
@@ -42,6 +44,18 @@ if (-not $Desktop) {
             Start-Sleep -Milliseconds 150
         }
         Start-Sleep -Milliseconds 1200
+    }
+    foreach ($size in ($Resize -split ',' | Where-Object { $_ })) {
+        $w, $h = $size -split 'x'
+        # SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE
+        [Native.User32]::SetWindowPos($hwnd, [IntPtr]::Zero, 0, 0, [int]$w, [int]$h, 0x16) | Out-Null
+        Start-Sleep -Milliseconds 300
+    }
+    if ($PageCommand -ge 0) {
+        $page = [Native.User32]::GetWindow($hwnd, 5)
+        while ($page -ne [IntPtr]::Zero -and -not [Native.User32]::IsWindowVisible($page)) { $page = [Native.User32]::GetWindow($page, 2) }
+        [Native.User32]::PostMessage($page, 0x0111, [IntPtr]$PageCommand, [IntPtr]::Zero) | Out-Null
+        Start-Sleep -Milliseconds 2500
     }
     # HWND_TOPMOST without moving, sizing or activating, then back to HWND_NOTOPMOST
     [Native.User32]::SetWindowPos($hwnd, [IntPtr](-1), 0, 0, 0, 0, 0x13) | Out-Null

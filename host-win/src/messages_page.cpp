@@ -6,6 +6,7 @@
 #include <shellapi.h>
 
 #include <algorithm>
+#include <array>
 #include <unordered_map>
 
 namespace {
@@ -15,8 +16,8 @@ enum ControlId {
     IDC_FOLDERS,
     IDC_MESSAGES,
     IDC_FOLDER_BAR,
-    IDC_HEADER,
     IDC_PREVIEW_HOST,
+    IDC_INFO_BAR,
     IDC_NEW_MAIL = 450,
     IDC_IMPORT,
     IDC_DELETE,
@@ -38,6 +39,8 @@ enum ControlId {
 
 constexpr int kMaxAttachmentItems = 100;
 constexpr UINT_PTR kRefreshTimer = 1;
+// height of a line of the header strip
+const int kHeaderLine = Scale(17);
 
 // a mailbox as the sidecar describes it for the folder tree
 struct Folder {
@@ -92,15 +95,12 @@ protected:
         ListView_SetExtendedListViewStyle(list_, LVS_EX_FULLROWSELECT | LVS_EX_HEADERDRAGDROP);
         AddColumns(list_, {{L"!", 20}, {L"From", 180}, {L"Subject", 320}, {L"Received", 120}, {L"Size", 70, LVCFMT_RIGHT}});
 
-        for (const wchar_t* label : {L"From:", L"To:", L"Subject:"}) {
-            HWND control = AddControl(L"STATIC", label, SS_RIGHT | SS_NOPREFIX, IDC_HEADER);
-            SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(BoldFont()), TRUE);
-            headerLabels_.push_back(control);
-        }
-        for (int i = 0; i < 3; i++) {
-            headerValues_.push_back(AddControl(L"STATIC", L"", SS_LEFT | SS_NOPREFIX | SS_ENDELLIPSIS, IDC_HEADER));
-        }
-        attachments_ = AddControl(L"STATIC", L"", SS_LEFT | SS_NOPREFIX | SS_ENDELLIPSIS, IDC_HEADER);
+        // the bar of Outlook Express 6 above a message whose pictures it did not download
+        infoBar_ = AddControl(L"STATIC",
+                              L"  Pictures from the internet are blocked, so the sender can not tell when and where the message was read. "
+                              L"Click here to show them.",
+                              SS_LEFT | SS_CENTERIMAGE | SS_NOTIFY | SS_NOPREFIX | SS_ENDELLIPSIS, IDC_INFO_BAR, WS_EX_STATICEDGE);
+        ShowWindow(infoBar_, SW_HIDE);
 
         previewHost_ = AddControl(L"STATIC", L"", SS_SUNKEN | WS_CLIPCHILDREN, IDC_PREVIEW_HOST);
         preview_.Create(previewHost_, [this](const std::wstring& error) { SetWindowTextW(previewHost_, error.c_str()); });
@@ -142,23 +142,24 @@ protected:
         splitters_[1].area = {left, y + listHeight_, width, y + listHeight_ + pad};
         y += listHeight_ + pad;
 
-        int line = Scale(17);
-        int labelWidth = Scale(55);
-        int valueLeft = left + labelWidth + Scale(6);
-        for (int i = 0; i < 3; i++) {
-            MoveWindow(headerLabels_[i], left, y + Scale(4) + i * line, labelWidth, line, TRUE);
-            MoveWindow(headerValues_[i], valueLeft, y + Scale(4) + i * line, width - valueLeft - Scale(4), line, TRUE);
+        // the header strip is painted in WM_PAINT
+        header_ = {left, y, width, y + Scale(8) + 4 * kHeaderLine};
+        InvalidateRect(hwnd_, &header_, TRUE);
+        y = header_.bottom + pad;
+        if (IsWindowVisible(infoBar_)) {
+            MoveWindow(infoBar_, left, y, width - left, Scale(24), TRUE);
+            y += Scale(24) + pad;
         }
-        MoveWindow(attachments_, valueLeft, y + Scale(4) + 3 * line, width - valueLeft - Scale(4), line, TRUE);
-        headerTop_ = y;
-        headerBottom_ = y + Scale(8) + 4 * line;
-        y = headerBottom_ + pad;
         MoveWindow(previewHost_, left, y, width - left, height - y, TRUE);
         preview_.Resize({0, 0, width - left, height - y});
         InvalidateRect(hwnd_, nullptr, TRUE);
     }
 
-    void OnCommand(int id, int, HWND) override {
+    void OnCommand(int id, int code, HWND) override {
+        if (id == IDC_INFO_BAR && code == STN_CLICKED) {
+            ShowRemoteImages();
+            return;
+        }
         if (id >= IDM_MOVE_FIRST && id < IDM_MOVE_FIRST + static_cast<int>(folders_.size())) {
             const std::string& target = folders_[id - IDM_MOVE_FIRST].path;
             if (target != current_) {
@@ -255,7 +256,21 @@ protected:
                 KillTimer(hwnd_, kRefreshTimer);
                 Refresh();
                 return 0;
+            case WM_SETCURSOR:
+                if (reinterpret_cast<HWND>(wParam) == infoBar_) {
+                    SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                    return TRUE;
+                }
+                break;
             case WM_CTLCOLORSTATIC:
+                if (reinterpret_cast<HWND>(lParam) == infoBar_) {
+                    // the yellow of a classic tooltip
+                    static HBRUSH infoBrush = CreateSolidBrush(GetSysColor(COLOR_INFOBK));
+                    HDC dc = reinterpret_cast<HDC>(wParam);
+                    SetTextColor(dc, GetSysColor(COLOR_INFOTEXT));
+                    SetBkColor(dc, GetSysColor(COLOR_INFOBK));
+                    return reinterpret_cast<LRESULT>(infoBrush);
+                }
                 if (reinterpret_cast<HWND>(lParam) == folderBar_) {
                     // the dark folder bar of Outlook Express 5
                     static HBRUSH brush = CreateSolidBrush(RGB(128, 128, 128));
@@ -268,11 +283,7 @@ protected:
             case WM_PAINT: {
                 PAINTSTRUCT paint;
                 HDC dc = BeginPaint(hwnd_, &paint);
-                // a raised strip behind the message headers
-                RECT client;
-                GetClientRect(hwnd_, &client);
-                RECT headerRect = {treeWidth_ + Scale(4), headerTop_, client.right, headerBottom_};
-                DrawEdge(dc, &headerRect, EDGE_ETCHED, BF_RECT);
+                PaintHeader(dc);
                 EndPaint(hwnd_, &paint);
                 return 0;
             }
@@ -682,17 +693,16 @@ private:
             }
             currentMessage_ = result;
             sourceHtml_.clear();
-            SetWindowTextW(headerValues_[0], JsonText(result, "from").c_str());
+            remoteImages_ = false;
+            SetInfoBar(result.value("remoteImages", false));
             std::wstring to = JsonText(result, "to");
             std::wstring cc = JsonText(result, "cc");
-            SetWindowTextW(headerValues_[1], (cc.empty() ? to : to + L"; Cc: " + cc).c_str());
-            SetWindowTextW(headerValues_[2], JsonText(result, "subject").c_str());
             std::wstring files;
             for (const auto& attachment : CurrentAttachments()) {
                 files += (files.empty() ? L"Attachments: " : L", ") + JsonText(attachment, "filename") + L" (" +
                          FormatSize(attachment.value("size", 0.0)) + L")";
             }
-            SetWindowTextW(attachments_, files.c_str());
+            SetHeader({JsonText(result, "from"), cc.empty() ? to : to + L"; Cc: " + cc, JsonText(result, "subject"), files});
             ShowCurrentDocument();
         });
     }
@@ -706,7 +716,7 @@ private:
             return;
         }
         if (!showSource_) {
-            preview_.Show(JsonText(currentMessage_, "previewHtml"));
+            preview_.Show(JsonText(currentMessage_, "previewHtml"), remoteImages_);
             return;
         }
         if (!sourceHtml_.empty()) {
@@ -724,14 +734,64 @@ private:
         });
     }
 
+    // loads the preview again with the images from the network, for this message only
+    void ShowRemoteImages() {
+        std::string path = current_;
+        int uid = selectedUid_;
+        TheSidecar().Call("message", {{"path", path}, {"uid", uid}, {"remoteImages", true}}, [this, path, uid](const json& result, const std::string& error) {
+            if (!error.empty() || path != current_ || uid != selectedUid_) {
+                return;
+            }
+            currentMessage_ = result;
+            remoteImages_ = true;
+            SetInfoBar(false);
+            ShowCurrentDocument();
+        });
+    }
+
+    // From, To, Subject and the attachments line of the previewed message
+    void SetHeader(std::array<std::wstring, 4> values) {
+        headerValues_ = std::move(values);
+        InvalidateRect(hwnd_, &header_, TRUE);
+    }
+
+    // the raised strip with the headers of the previewed message, painted here rather than with label controls,
+    // which covered its border and left old text behind when they moved
+    void PaintHeader(HDC dc) {
+        RECT strip = header_;
+        DrawEdge(dc, &strip, EDGE_ETCHED, BF_RECT);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, GetSysColor(COLOR_BTNTEXT));
+        int labelRight = header_.left + Scale(60);
+        int valueLeft = labelRight + Scale(6);
+        const wchar_t* labels[] = {L"From:", L"To:", L"Subject:", L""};
+        for (int i = 0; i < 4; i++) {
+            int top = header_.top + Scale(4) + i * kHeaderLine;
+            RECT label = {header_.left + Scale(4), top, labelRight, top + kHeaderLine};
+            RECT value = {valueLeft, top, header_.right - Scale(6), top + kHeaderLine};
+            SelectObject(dc, BoldFont());
+            DrawTextW(dc, labels[i], -1, &label, DT_RIGHT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            SelectObject(dc, UiFont());
+            DrawTextW(dc, headerValues_[i].c_str(), -1, &value, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+        }
+    }
+
+    void SetInfoBar(bool visible) {
+        if ((IsWindowVisible(infoBar_) != FALSE) != visible) {
+            ShowWindow(infoBar_, visible ? SW_SHOW : SW_HIDE);
+            RECT client;
+            GetClientRect(hwnd_, &client);
+            OnSize(client.right, client.bottom);
+        }
+    }
+
     void ClearPreview() {
         selectedUid_ = 0;
         currentMessage_ = nullptr;
         sourceHtml_.clear();
-        for (HWND value : headerValues_) {
-            SetWindowTextW(value, L"");
-        }
-        SetWindowTextW(attachments_, L"");
+        remoteImages_ = false;
+        SetInfoBar(false);
+        SetHeader({});
         preview_.Clear();
     }
 
@@ -882,9 +942,10 @@ private:
         TheSidecar().Call("importMessages", {{"path", current_.empty() ? "INBOX" : current_}, {"files", paths}}, ErrorReporter(hwnd_, L"Import"));
     }
 
-    HWND toolbar_ = nullptr, tree_ = nullptr, folderBar_ = nullptr, list_ = nullptr, previewHost_ = nullptr, attachments_ = nullptr;
-    std::vector<HWND> headerLabels_, headerValues_;
-    int headerTop_ = 0, headerBottom_ = 0;
+    HWND toolbar_ = nullptr, tree_ = nullptr, folderBar_ = nullptr, list_ = nullptr, previewHost_ = nullptr;
+    HWND infoBar_ = nullptr;
+    RECT header_ = {};
+    std::array<std::wstring, 4> headerValues_;
     int treeWidth_ = 0, listHeight_ = 0, listTop_ = 0;
     Preview preview_;
 
@@ -899,6 +960,8 @@ private:
     json currentMessage_;
     std::wstring sourceHtml_;
     bool showSource_ = false;
+    // the user asked for the images from the network of the previewed message
+    bool remoteImages_ = false;
     bool listDirty_ = false;
     bool foldersDirty_ = false;
     bool rebuilding_ = false;

@@ -202,7 +202,7 @@ const methods = {
             server.control.setFlags(params.path, [params.uid], ['\\Seen'], 'add');
             message.flags = message.flags.concat('\\Seen');
         }
-        return parseMessage(message);
+        return parseMessage(message, !!params.remoteImages);
     },
 
     messageSource: params => ({ sourceHtml: sourceDocument(server.control.getMessage(params.path, params.uid).raw) }),

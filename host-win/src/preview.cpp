@@ -86,7 +86,12 @@ void Preview::Configure() {
             args->get_Request(&request);
             LPWSTR uri = nullptr;
             request->get_Uri(&uri);
-            if (StartsWith(uri, L"http://") || StartsWith(uri, L"https://") || StartsWith(uri, L"ftp://") || StartsWith(uri, L"file:")) {
+            COREWEBVIEW2_WEB_RESOURCE_CONTEXT context = COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL;
+            args->get_ResourceContext(&context);
+            // images from the network only when the user asked for them, never anything else
+            bool allowed = remoteImages_ && context == COREWEBVIEW2_WEB_RESOURCE_CONTEXT_IMAGE &&
+                           (StartsWith(uri, L"http://") || StartsWith(uri, L"https://"));
+            if (!allowed && (StartsWith(uri, L"http://") || StartsWith(uri, L"https://") || StartsWith(uri, L"ftp://") || StartsWith(uri, L"file:"))) {
                 ComPtr<ICoreWebView2WebResourceResponse> response;
                 environment_->CreateWebResourceResponse(nullptr, 403, L"Blocked", L"", &response);
                 args->put_Response(response.Get());
@@ -129,11 +134,12 @@ void Preview::Configure() {
     if (pending_.empty()) {
         Clear();
     } else {
-        Show(pending_);
+        Show(pending_, remoteImages_);
     }
 }
 
-void Preview::Show(const std::wstring& html) {
+void Preview::Show(const std::wstring& html, bool remoteImages) {
+    remoteImages_ = remoteImages;
     if (!view_) {
         pending_ = html;
         return;
