@@ -15,5 +15,7 @@ xcopy /e /i /q sidecar\node_modules %OUT%\sidecar\node_modules >nul || exit /b 1
 rem a pinned Node.js LTS, checked against the checksums of nodejs.org
 set NODE_VERSION=v24.22.1
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0fetch-node.ps1" -Version %NODE_VERSION% -Out %OUT%\node\node.exe || exit /b 1
+rem LICENSE.txt and THIRD-PARTY-NOTICES.txt, the license texts of Node.js and everything else that ships
+node "%~dp0notices.mjs" %OUT% %NODE_VERSION% build || exit /b 1
 powershell -NoProfile -Command "Compress-Archive -Path '%OUT%' -DestinationPath 'dist\ImapKitDesktop-win-x64.zip' -Force" || exit /b 1
 echo dist\ImapKitDesktop-win-x64.zip

@@ -30,6 +30,7 @@ enum MenuId {
     IDM_EXPORT_MAILBOXES,
     IDM_RESET_MAILBOXES,
     IDM_CHECK_UPDATES,
+    IDM_THIRD_PARTY_NOTICES,
     IDM_TRAY_OPEN,
     IDM_TRAY_TOGGLE_SERVER,
 };
@@ -131,6 +132,7 @@ HMENU BuildMenu() {
     HMENU help = CreatePopupMenu();
     AppendMenuW(help, MF_STRING, IDM_CHECK_UPDATES, L"Check for &Updates...");
     AppendMenuW(help, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(help, MF_STRING, IDM_THIRD_PARTY_NOTICES, L"Third-Party &Notices");
     AppendMenuW(help, MF_STRING, IDM_ABOUT, L"&About ImapKit Desktop");
     HMENU bar = CreateMenu();
     AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(file), L"&File");
@@ -296,6 +298,16 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                 case IDM_CHECK_UPDATES:
                     CheckForUpdates(hwnd);
                     break;
+                case IDM_THIRD_PARTY_NOTICES: {
+                    // written next to the exe by the packaging (scripts/notices.mjs), a development build has none
+                    std::wstring file = ExeDirectory() + L"\\THIRD-PARTY-NOTICES.txt";
+                    if (GetFileAttributesW(file.c_str()) == INVALID_FILE_ATTRIBUTES) {
+                        MessageBoxW(hwnd, L"THIRD-PARTY-NOTICES.txt is part of the installed app, this copy has none.", kTitle, MB_ICONINFORMATION);
+                    } else {
+                        ShellExecuteW(nullptr, L"open", file.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                    }
+                    break;
+                }
                 case IDM_RESET_MAILBOXES:
                     if (MessageBoxW(hwnd, L"Remove every message and folder and start over with the default mailboxes?", L"Reset Mailboxes",
                                     MB_ICONWARNING | MB_OKCANCEL) == IDOK) {

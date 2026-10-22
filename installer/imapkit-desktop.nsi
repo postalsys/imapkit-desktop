@@ -74,7 +74,8 @@ Var WelcomeText
 !define MUI_FINISHPAGE_RUN_TEXT "Start ${PRODUCT}"
 
 !insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_LICENSE "${ROOT}/LICENSE"
+; the license of the app, pointing to THIRD-PARTY-NOTICES.txt for the bundled software (scripts/notices.mjs)
+!insertmacro MUI_PAGE_LICENSE "${STAGING}/LICENSE.txt"
 ; an upgrade goes where the installed version is, the folder is chosen on the first install only
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipDirectoryOnUpgrade
 !insertmacro MUI_PAGE_DIRECTORY
@@ -199,6 +200,8 @@ Section "Uninstall"
     ; only what the installer put there, the folder may hold files of the user
     Delete "$INSTDIR\${EXE}"
     Delete "$INSTDIR\uninstall.exe"
+    Delete "$INSTDIR\LICENSE.txt"
+    Delete "$INSTDIR\THIRD-PARTY-NOTICES.txt"
     RMDir /r "$INSTDIR\sidecar"
     RMDir /r "$INSTDIR\node"
     RMDir "$INSTDIR"

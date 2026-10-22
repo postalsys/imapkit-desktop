@@ -27,6 +27,10 @@ Run `ImapKitDesktop-Setup.exe` from the [latest release](https://github.com/post
 
 Running the setup of a newer version updates the installed one in place: a running copy is closed first (it saves its mailboxes), and the mailboxes and settings in `%APPDATA%\ImapKitDesktop` are kept. An older version asks before it replaces a newer one. `/S` installs silently; uninstalling asks whether to remove the mailboxes too (a silent uninstall keeps them).
 
+## Licenses
+
+ImapKit Desktop is MIT licensed. The installer also ships Node.js, the npm packages of the sidecar, and nlohmann/json and the WebView2 loader compiled into the exe, all under permissive licenses. `scripts/notices.mjs` collects their license texts into `THIRD-PARTY-NOTICES.txt` when the app is packaged; it is installed next to the exe and opened from Help > Third-Party Notices.
+
 ## Building
 
 On Windows with Visual Studio 2022 Build Tools (C++ workload) and Node.js 20 or newer:
