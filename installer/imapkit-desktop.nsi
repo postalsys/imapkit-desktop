@@ -172,7 +172,8 @@ Section "Install"
     ; the bundled sidecar and Node.js are replaced as a whole, files that a newer version left out must not linger
     RMDir /r "$INSTDIR\sidecar"
     RMDir /r "$INSTDIR\node"
-    File /r "${STAGING}/*"
+    ; a backslash before the wildcard, makensis on Windows does not match "dir/*" and on other systems it converts it
+    File /r "${STAGING}\*"
     WriteUninstaller "$INSTDIR\uninstall.exe"
 
     CreateShortcut "$SMPROGRAMS\${PRODUCT}.lnk" "$INSTDIR\${EXE}"
