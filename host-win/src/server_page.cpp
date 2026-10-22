@@ -8,6 +8,7 @@
 #include <windowsx.h>
 
 #include <algorithm>
+#include <array>
 #include <set>
 
 namespace {
@@ -52,6 +53,8 @@ enum ControlId {
     IDC_SMTP_REQUIRE_AUTH,
     IDC_SMTP_MAX_SIZE,
     IDC_SMTP_REJECT,
+    IDC_SMTP_REJECT_ADD,
+    IDC_SMTP_REJECT_REMOVE,
 };
 
 enum AdvancedTab { TAB_EXTENSIONS, TAB_ID, TAB_LIMITS, TAB_QUIRKS, TAB_SCRIPTS, TAB_SMTP, TAB_REST, TAB_COUNT };
@@ -86,6 +89,9 @@ struct User {
     std::wstring name;
     std::wstring password;
 };
+
+// a row of the rejected recipients of the SMTP tab: the cells as shown, address, reply code and reply text
+using RejectRow = std::array<std::wstring, 3>;
 
 // the host name an email client uses for an address the server listens on
 std::wstring ClientHost(const std::wstring& address) {
@@ -203,12 +209,16 @@ protected:
         smtp.push_back(smtpMaxSize_ = AddControl(L"EDIT", L"", WS_TABSTOP | ES_NUMBER | ES_AUTOHSCROLL, IDC_SMTP_MAX_SIZE, WS_EX_CLIENTEDGE));
         smtp.push_back(smtpMaxSizeNote_ = AddControl(L"STATIC", L"bytes, advertised with SIZE, larger mail gets 552. Empty: any size", SS_LEFT | SS_ENDELLIPSIS, 0));
         smtp.push_back(smtpRejectLabel_ = AddControl(L"STATIC",
-                                                     L"Rejected recipients, one per line: the address (* matches anything), then the reply code "
-                                                     L"(550 when left out) and its text, e.g. *@blocked.test 550 No such user",
+                                                     L"Rejected recipients: RCPT TO for a matching address gets the reply code and text. "
+                                                     L"* in an address matches anything. Double-click a cell to edit it.",
                                                      SS_LEFT, 0));
-        smtp.push_back(smtpReject_ = AddControl(L"EDIT", L"", WS_TABSTOP | ES_MULTILINE | ES_WANTRETURN | ES_AUTOVSCROLL | WS_VSCROLL,
-                                                IDC_SMTP_REJECT, WS_EX_CLIENTEDGE));
-        SendMessageW(smtpReject_, WM_SETFONT, reinterpret_cast<WPARAM>(MonoFont()), TRUE);
+        smtp.push_back(smtpReject_ = AddControl(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS, IDC_SMTP_REJECT,
+                                                WS_EX_CLIENTEDGE));
+        ListView_SetExtendedListViewStyle(smtpReject_, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
+        AddColumns(smtpReject_, {{L"Address", 200}, {L"Code", 50}, {L"Reply text", 200}});
+        SetEmptyText(smtpReject_, L"No rejected recipients, every address is accepted. Add one to refuse it.");
+        smtp.push_back(smtpRejectAdd_ = AddControl(L"BUTTON", L"Add &Row", WS_TABSTOP, IDC_SMTP_REJECT_ADD));
+        smtp.push_back(smtpRejectRemove_ = AddControl(L"BUTTON", L"Remo&ve Row", WS_TABSTOP, IDC_SMTP_REJECT_REMOVE));
 
         auto& quirks = tabs_[TAB_QUIRKS];
         quirks.push_back(quirksHint_ = AddControl(L"STATIC", L"Make the server behave like a known real server, to test how a client copes with it.",
@@ -317,7 +327,7 @@ protected:
         bool idField = id >= IDC_ID_FIELD && id < IDC_ID_FIELD + kIdFieldCount;
         bool limitField = id >= IDC_LIMIT_FIELD && id < IDC_LIMIT_FIELD + kLimitCount;
         if (code == EN_CHANGE &&
-            (idField || limitField || id == IDC_SMTP_MAX_SIZE || id == IDC_SMTP_REJECT || id == IDC_IMAP_PORT || id == IDC_IMAPS_PORT || id == IDC_SMTP_PORT || id == IDC_REST_PORT || id == IDC_REST_TOKEN)) {
+            (idField || limitField || id == IDC_SMTP_MAX_SIZE || id == IDC_IMAP_PORT || id == IDC_IMAPS_PORT || id == IDC_SMTP_PORT || id == IDC_REST_PORT || id == IDC_REST_TOKEN)) {
             SettingsChanged();
             return;
         }
@@ -351,6 +361,15 @@ protected:
                 break;
             case IDC_USER_ADD:
                 EditUser(-1);
+                break;
+            case IDC_SMTP_REJECT_ADD:
+                // a new row starts with the most common refusal, the address is typed in right away
+                rejects_.push_back({L"", L"550", L"No such user"});
+                FillRejects(static_cast<int>(rejects_.size()) - 1);
+                EditReject(static_cast<int>(rejects_.size()) - 1, 0);
+                break;
+            case IDC_SMTP_REJECT_REMOVE:
+                RemoveReject();
                 break;
             case IDC_USER_EDIT:
                 EditUser(ListView_GetNextItem(usersList_, -1, LVNI_SELECTED));
@@ -397,6 +416,9 @@ protected:
         if (header->hwndFrom == advanced_ && header->code == TCN_SELCHANGE) {
             ShowTab(TabCtrl_GetCurSel(advanced_));
             return 0;
+        }
+        if (header->hwndFrom == smtpReject_) {
+            return OnRejectNotify(header);
         }
         if (header->code == NM_DBLCLK && header->hwndFrom == usersList_) {
             EditUser(ListView_GetNextItem(usersList_, -1, LVNI_SELECTED));
@@ -487,7 +509,11 @@ private:
         y += Scale(32);
         MoveWindow(smtpRejectLabel_, area.left, y, width, Scale(30), TRUE);
         y += Scale(32);
-        MoveWindow(smtpReject_, area.left, y, width, std::max(Scale(40), static_cast<int>(area.bottom) - y), TRUE);
+        int buttons = Scale(25) + pad;
+        MoveWindow(smtpReject_, area.left, y, width, std::max(Scale(40), static_cast<int>(area.bottom) - y - buttons), TRUE);
+        StretchColumn(smtpReject_, 2);
+        MoveWindow(smtpRejectAdd_, area.left, area.bottom - Scale(25), Scale(90), Scale(25), TRUE);
+        MoveWindow(smtpRejectRemove_, area.left + Scale(90) + pad, area.bottom - Scale(25), Scale(90), Scale(25), TRUE);
     }
 
     void LayoutTabs(const RECT& area) {
@@ -807,28 +833,89 @@ private:
     void LoadSmtp(const json& smtp) {
         Button_SetCheck(smtpRequireAuth_, smtp.value("requireAuth", false) ? BST_CHECKED : BST_UNCHECKED);
         SetOptionalNumber(smtpMaxSize_, smtp.value("maxSize", json(nullptr)));
-        std::wstring rules;
-        for (const auto& line : smtp.value("rejectRecipients", json::array())) {
-            rules += Widen(line.is_string() ? line.get<std::string>() : "") + L"\r\n";
+        rejects_.clear();
+        for (const auto& rule : smtp.value("rejectRecipients", json::array())) {
+            const json code = rule.value("code", json(nullptr));
+            rejects_.push_back({JsonText(rule, "address"), code.is_number_integer() ? std::to_wstring(code.get<int>()) : L"", JsonText(rule, "message")});
         }
-        SetWindowTextW(smtpReject_, rules.c_str());
+        FillRejects(-1);
     }
 
-    // the rejected recipients are kept as lines, the sidecar parses them (and refuses a broken one on start)
+    // the rows with an address, the sidecar checks the codes (and refuses a broken one on start)
     json ReadSmtp() {
-        json lines = json::array();
-        std::wstring text = GetWindowString(smtpReject_);
-        size_t start = 0;
-        while (start <= text.size()) {
-            size_t end = std::min(text.find(L'\n', start), text.size());
-            std::wstring line = text.substr(start, end - start);
-            line.erase(line.find_last_not_of(L" \t\r") + 1);
-            if (!line.empty()) {
-                lines.push_back(Narrow(line));
+        json rules = json::array();
+        for (const RejectRow& row : rejects_) {
+            if (row[0].empty()) {
+                continue;
             }
-            start = end + 1;
+            rules.push_back({{"address", Narrow(row[0])},
+                             {"code", row[1].empty() ? json(nullptr) : json(_wtoi(row[1].c_str()))},
+                             {"message", Narrow(row[2])}});
         }
-        return {{"requireAuth", Button_GetCheck(smtpRequireAuth_) == BST_CHECKED}, {"maxSize", OptionalNumber(smtpMaxSize_)}, {"rejectRecipients", lines}};
+        return {{"requireAuth", Button_GetCheck(smtpRequireAuth_) == BST_CHECKED}, {"maxSize", OptionalNumber(smtpMaxSize_)}, {"rejectRecipients", rules}};
+    }
+
+    void FillRejects(int select) {
+        ListView_DeleteAllItems(smtpReject_);
+        for (int i = 0; i < static_cast<int>(rejects_.size()); i++) {
+            LVITEMW item = {};
+            item.mask = LVIF_TEXT;
+            item.iItem = i;
+            item.pszText = rejects_[i][0].data();
+            ListView_InsertItem(smtpReject_, &item);
+            ListView_SetItemText(smtpReject_, i, 1, rejects_[i][1].data());
+            ListView_SetItemText(smtpReject_, i, 2, rejects_[i][2].data());
+        }
+        if (select >= 0) {
+            ListView_SetItemState(smtpReject_, select, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        }
+        StretchColumn(smtpReject_, 2);
+    }
+
+    // edits a cell in place; Tab goes on to the next cell of the row, a row left without an address goes away
+    void EditReject(int row, int column) {
+        EditListCell(smtpReject_, row, column, column == 1, [this, row, column](const std::wstring& text, int move) {
+            if (row >= static_cast<int>(rejects_.size())) {
+                return;
+            }
+            rejects_[row][column] = text;
+            ListView_SetItemText(smtpReject_, row, column, rejects_[row][column].data());
+            SettingsChanged();
+            int next = column + move;
+            if (move && next >= 0 && next < 3) {
+                EditReject(row, next);
+            }
+        });
+    }
+
+    void RemoveReject() {
+        int row = ListView_GetNextItem(smtpReject_, -1, LVNI_SELECTED);
+        if (row < 0) {
+            return;
+        }
+        rejects_.erase(rejects_.begin() + row);
+        FillRejects(std::min(row, static_cast<int>(rejects_.size()) - 1));
+        SettingsChanged();
+    }
+
+    // double-click edits the cell under the mouse, F2 and Enter the address, Delete removes the row
+    LRESULT OnRejectNotify(NMHDR* header) {
+        if (header->code == NM_DBLCLK) {
+            LVHITTESTINFO hit = {};
+            hit.pt = reinterpret_cast<NMITEMACTIVATE*>(header)->ptAction;
+            if (ListView_SubItemHitTest(smtpReject_, &hit) >= 0) {
+                EditReject(hit.iItem, hit.iSubItem);
+            }
+        } else if (header->code == LVN_KEYDOWN) {
+            WORD key = reinterpret_cast<NMLVKEYDOWN*>(header)->wVKey;
+            int row = ListView_GetNextItem(smtpReject_, -1, LVNI_SELECTED);
+            if ((key == VK_F2 || key == VK_RETURN) && row >= 0) {
+                EditReject(row, 0);
+            } else if (key == VK_DELETE) {
+                RemoveReject();
+            }
+        }
+        return 0;
     }
 
     // the unit of each limit, and whether the extension it needs is turned on
@@ -972,7 +1059,8 @@ private:
     HWND idHint_ = nullptr, idEnabled_ = nullptr, idLabels_[kIdFieldCount] = {}, idEdits_[kIdFieldCount] = {};
     HWND limitsHint_ = nullptr, limitLabels_[kLimitCount] = {}, limitEdits_[kLimitCount] = {}, limitNotes_[kLimitCount] = {}, quotaSoft_ = nullptr;
     HWND smtpHint_ = nullptr, smtpRequireAuth_ = nullptr, smtpMaxSizeLabel_ = nullptr, smtpMaxSize_ = nullptr, smtpMaxSizeNote_ = nullptr;
-    HWND smtpRejectLabel_ = nullptr, smtpReject_ = nullptr;
+    HWND smtpRejectLabel_ = nullptr, smtpReject_ = nullptr, smtpRejectAdd_ = nullptr, smtpRejectRemove_ = nullptr;
+    std::vector<RejectRow> rejects_;
     std::vector<HWND> tabs_[TAB_COUNT];
 
     RECT banner_ = {};

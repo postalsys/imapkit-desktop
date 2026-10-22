@@ -21,8 +21,13 @@ describe('limit options', () => {
 });
 
 describe('rejected recipients', () => {
-    it('parses addresses with wildcards, codes and texts', () => {
-        const rules = recipientRules(['', '# a comment', 'blocked@example.com', '*@full.test 452 Mailbox full, try later', 'a+b@x.test Nope']);
+    it('makes rules of the rows, with wildcards, codes and texts', () => {
+        const rules = recipientRules([
+            { address: '', code: 550, message: 'skipped' },
+            { address: 'blocked@example.com', code: null, message: '' },
+            { address: '*@full.test', code: 452, message: 'Mailbox full, try later' },
+            { address: 'a+b@x.test', code: '551', message: 'Nope' }
+        ]);
         assert.strictEqual(rules.length, 3);
         assert.ok(rules[0].pattern.test('Blocked@Example.com'));
         assert.ok(!rules[0].pattern.test('blockedXexample.com'));
@@ -30,11 +35,11 @@ describe('rejected recipients', () => {
         assert.ok(rules[1].pattern.test('anyone@full.test'));
         assert.deepStrictEqual([rules[1].code, rules[1].message], [452, 'Mailbox full, try later']);
         assert.ok(rules[2].pattern.test('a+b@x.test'));
-        assert.deepStrictEqual([rules[2].code, rules[2].message], [550, 'Nope']);
+        assert.deepStrictEqual([rules[2].code, rules[2].message], [551, 'Nope']);
     });
 
     it('refuses a code that is not 4xx or 5xx', () => {
-        assert.throws(() => recipientRules(['ok@x.test 250']), /line 1: the reply code 250/);
+        assert.throws(() => recipientRules([{ address: 'ok@x.test', code: 250 }]), /row 1: the reply code 250/);
     });
 });
 
@@ -53,7 +58,7 @@ describe('limits and SMTP rules on the servers', () => {
             smtpPort: await freePort(),
             plugins: DEFAULT_CONFIG.plugins.concat('APPENDLIMIT'),
             limits: Object.assign({}, DEFAULT_CONFIG.limits, { appendLimit: 100 }),
-            smtp: { requireAuth: false, maxSize: 2000, rejectRecipients: ['*@blocked.test 551 Gone away'] }
+            smtp: { requireAuth: false, maxSize: 2000, rejectRecipients: [{ address: '*@blocked.test', code: 551, message: 'Gone away' }] }
         };
         await sidecar.call('start', { config });
     });
@@ -95,7 +100,11 @@ describe('limits and SMTP rules on the servers', () => {
 
     it('fails the start for a broken rule', async () => {
         await assert.rejects(
-            sidecar.call('start', { config: Object.assign({}, config, { smtp: { requireAuth: false, maxSize: null, rejectRecipients: ['x@y.test 999'] } }) }),
+            sidecar.call('start', {
+                config: Object.assign({}, config, {
+                    smtp: { requireAuth: false, maxSize: null, rejectRecipients: [{ address: 'x@y.test', code: 999, message: '' }] }
+                })
+            }),
             /reply code 999/
         );
     });

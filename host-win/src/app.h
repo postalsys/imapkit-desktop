@@ -67,6 +67,9 @@ void StretchColumn(HWND list, int column, int minimum = 60);
 void SetEmptyText(HWND list, const std::wstring& text);
 // draws a group-box-like etched frame, for areas a page paints itself
 void DrawEtchedFrame(HDC dc, RECT rect);
+// edits a cell of a report list view in place, over the cell: Enter or leaving it keeps the text, Escape drops it, Tab
+// and Shift+Tab keep it and ask for the next or previous cell with `move` 1 or -1. `done` gets the text when kept
+void EditListCell(HWND list, int row, int column, bool number, std::function<void(const std::wstring& text, int move)> done);
 
 // ---- dialogs and the clipboard (dialog.cpp) ----
 

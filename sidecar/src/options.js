@@ -50,35 +50,29 @@ export function limitOptions(config) {
 }
 
 /**
- * Parses the rejected recipients of the SMTP settings, one rule per line: an address where `*` matches any characters,
- * then optionally the reply code (4xx or 5xx, 550 when left out) and the text of the reply
+ * The rejected recipients of the SMTP settings as rules: an address where `*` matches any characters, the reply code
+ * (4xx or 5xx, 550 when empty) and the text of the reply
  *
- *   blocked@example.com
- *   *@full.test 452 Mailbox full, try again later
- *
- * @param {String[]} lines The rules as the GUI has them
+ * @param {Object[]} rows `[{ address, code, message }]` as the GUI has them, rows without an address are skipped
  * @return {Object[]} `[{ pattern, code, message }]`, the pattern as a RegExp
- * @throws {Error} for a line with a code that is not 4xx or 5xx
+ * @throws {Error} for a row with a code that is not 4xx or 5xx
  */
-export function recipientRules(lines) {
+export function recipientRules(rows) {
     const rules = [];
-    (lines || []).forEach((line, index) => {
-        const [address, ...rest] = String(line).trim().split(/\s+/);
-        if (!address || address.startsWith('#')) {
+    (rows || []).forEach((row, index) => {
+        const address = String((row && row.address) || '').trim();
+        if (!address) {
             return;
         }
-        let code = 550;
-        if (rest.length && /^\d+$/.test(rest[0])) {
-            code = Number(rest.shift());
-            if (code < 400 || code > 599) {
-                throw new Error(`Rejected recipients, line ${index + 1}: the reply code ${code} is not 4xx or 5xx`);
-            }
+        const code = row.code === null || row.code === undefined || row.code === '' ? 550 : Number(row.code);
+        if (!Number.isInteger(code) || code < 400 || code > 599) {
+            throw new Error(`Rejected recipients, row ${index + 1}: the reply code ${row.code} is not 4xx or 5xx`);
         }
         const source = address
             .split('*')
             .map(part => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
             .join('.*');
-        rules.push({ pattern: new RegExp('^' + source + '$', 'i'), code, message: rest.join(' ') || 'Recipient rejected' });
+        rules.push({ pattern: new RegExp('^' + source + '$', 'i'), code, message: String(row.message || '').trim() || 'Recipient rejected' });
     });
     return rules;
 }

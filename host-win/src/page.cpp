@@ -239,6 +239,80 @@ void DrawEtchedFrame(HDC dc, RECT rect) {
     DrawEdge(dc, &rect, EDGE_ETCHED, BF_RECT);
 }
 
+namespace {
+
+struct CellEditor {
+    HWND list;
+    std::function<void(const std::wstring&, int)> done;
+    bool finished = false;
+};
+
+// keeps or drops the text once, the edit goes away a moment later (not while it handles its own focus change)
+void FinishCell(HWND edit, CellEditor* editor, bool keep, int move, bool byKey) {
+    if (editor->finished) {
+        return;
+    }
+    editor->finished = true;
+    std::wstring text = GetWindowString(edit);
+    ShowWindow(edit, SW_HIDE);
+    PostMessageW(edit, WM_CLOSE, 0, 0);
+    if (byKey) {
+        SetFocus(editor->list);
+    }
+    if (keep) {
+        editor->done(text, move);
+    }
+}
+
+LRESULT CALLBACK CellEditProc(HWND edit, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR data) {
+    auto* editor = reinterpret_cast<CellEditor*>(data);
+    switch (message) {
+        case WM_GETDLGCODE:
+            // Enter, Escape and Tab belong to the editor, not to the dialog navigation of the window
+            return DefSubclassProc(edit, message, wParam, lParam) | DLGC_WANTALLKEYS;
+        case WM_KEYDOWN:
+            if (wParam == VK_RETURN || wParam == VK_ESCAPE || wParam == VK_TAB) {
+                int move = wParam != VK_TAB ? 0 : GetKeyState(VK_SHIFT) < 0 ? -1 : 1;
+                FinishCell(edit, editor, wParam != VK_ESCAPE, move, true);
+                return 0;
+            }
+            break;
+        case WM_CHAR:
+            if (wParam == L'\r' || wParam == 27 || wParam == L'\t') {
+                return 0;
+            }
+            break;
+        case WM_KILLFOCUS:
+            FinishCell(edit, editor, true, 0, false);
+            break;
+        case WM_NCDESTROY:
+            RemoveWindowSubclass(edit, CellEditProc, 0);
+            delete editor;
+            break;
+    }
+    return DefSubclassProc(edit, message, wParam, lParam);
+}
+
+}  // namespace
+
+void EditListCell(HWND list, int row, int column, bool number, std::function<void(const std::wstring& text, int move)> done) {
+    ListView_EnsureVisible(list, row, FALSE);
+    RECT cell = {};
+    ListView_GetSubItemRect(list, row, column, LVIR_LABEL, &cell);
+    if (column == 0) {
+        // the label rect of the first column ends where the second column starts, its width is the column width
+        cell.right = cell.left + ListView_GetColumnWidth(list, 0);
+    }
+    wchar_t text[1024] = L"";
+    ListView_GetItemText(list, row, column, text, 1024);
+    HWND edit = CreateWindowExW(0, L"EDIT", text, WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL | (number ? ES_NUMBER : 0), cell.left,
+                                cell.top - 1, cell.right - cell.left, cell.bottom - cell.top + 2, list, nullptr, GetModuleHandleW(nullptr), nullptr);
+    SendMessageW(edit, WM_SETFONT, SendMessageW(list, WM_GETFONT, 0, 0), TRUE);
+    SetWindowSubclass(edit, CellEditProc, 0, reinterpret_cast<DWORD_PTR>(new CellEditor{list, std::move(done)}));
+    SetFocus(edit);
+    SendMessageW(edit, EM_SETSEL, 0, -1);
+}
+
 Sidecar::Callback ErrorReporter(HWND owner, std::wstring action) {
     return [owner, action](const json&, const std::string& error) {
         if (!error.empty()) {
