@@ -129,6 +129,9 @@ public:
     HWND hwnd() const { return hwnd_; }
 
     virtual void OnEvent(const std::string& /*name*/, const json& /*data*/) {}
+    // false for a page with group boxes: they draw only their frame, so the page has to paint the background under
+    // them, which WS_CLIPCHILDREN would skip and leave the pixels of the page shown before
+    virtual bool ClipChildren() const { return true; }
     // the page became visible
     virtual void OnShow() {}
 

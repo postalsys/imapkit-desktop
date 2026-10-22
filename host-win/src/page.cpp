@@ -181,7 +181,7 @@ static const wchar_t* kPageClass = L"ImapKitDesktopPage";
 
 HWND Page::Create(HWND parent) {
     RegisterPlainClass(kPageClass, WndProc);
-    return CreateWindowExW(WS_EX_CONTROLPARENT, kPageClass, L"", WS_CHILD | WS_CLIPCHILDREN, 0, 0, 0, 0, parent, nullptr,
+    return CreateWindowExW(WS_EX_CONTROLPARENT, kPageClass, L"", WS_CHILD | (ClipChildren() ? WS_CLIPCHILDREN : 0), 0, 0, 0, 0, parent, nullptr,
                            GetModuleHandleW(nullptr), this);
 }
 

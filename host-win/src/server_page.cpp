@@ -44,6 +44,8 @@ struct User {
 
 class ServerPage : public Page {
 public:
+    bool ClipChildren() const override { return false; }
+
     void OnEvent(const std::string& name, const json& data) override {
         if (name == "ready") {
             TheSidecar().Call("hello", json::object(), [this](const json& result, const std::string& error) {
