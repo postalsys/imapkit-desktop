@@ -22,6 +22,10 @@ constexpr UINT WM_SIDECAR_LINES = WM_APP + 1;
 constexpr UINT WM_SIDECAR_STDERR = WM_APP + 2;
 // the sidecar process exited, wParam is the exit code
 constexpr UINT WM_SIDECAR_EXIT = WM_APP + 3;
+// a mouse message on the notification area icon, lParam is the mouse message
+constexpr UINT WM_TRAY = WM_APP + 4;
+// another start of the app asks the running one to show its window
+constexpr UINT WM_SHOW_APP = WM_APP + 5;
 
 // ---- helpers (page.cpp) ----
 
@@ -179,6 +183,19 @@ private:
 
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 };
+
+// ---- the notification area icon (tray.cpp) ----
+
+void TrayAdd(HWND hwnd, HICON icon, const std::wstring& tip);
+void TrayRemove();
+void TraySetTip(const std::wstring& tip);
+void TrayBalloon(const std::wstring& title, const std::wstring& text);
+struct TrayItem {
+    int id;
+    std::wstring text;
+};
+// shows a menu at the mouse, the chosen id or 0; an item with id 0 is a separator, the first item the default
+int TrayMenu(HWND hwnd, const std::vector<TrayItem>& items);
 
 Page* CreateServerPage();
 Page* CreateConnectionsPage();

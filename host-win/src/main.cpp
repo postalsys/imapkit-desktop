@@ -30,6 +30,8 @@ enum MenuId {
     IDM_EXPORT_MAILBOXES,
     IDM_RESET_MAILBOXES,
     IDM_CHECK_UPDATES,
+    IDM_TRAY_OPEN,
+    IDM_TRAY_TOGGLE_SERVER,
 };
 
 const wchar_t* kJsonFilter = L"JSON files (*.json)\0*.json\0All files (*.*)\0*.*\0";
@@ -43,6 +45,41 @@ HWND g_status = nullptr;
 constexpr int kPageCount = 4;
 Page* g_pages[kPageCount] = {};
 int g_current = -1;
+// whether the server listens: closing the window then only hides it, the app stays in the notification area
+bool g_running = false;
+bool g_trayNoticeShown = false;
+// Explorer sends this after a restart, the notification area icon has to be added again
+UINT g_taskbarCreated = 0;
+
+HICON SmallIcon() {
+    return static_cast<HICON>(LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(101), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+                                         GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
+}
+
+void ShowMainWindow() {
+    ShowWindow(g_main, IsIconic(g_main) ? SW_RESTORE : SW_SHOW);
+    SetForegroundWindow(g_main);
+}
+
+// the close button while the server listens: the window goes, the server stays, like a service
+void HideToTray() {
+    ShowWindow(g_main, SW_HIDE);
+    if (!g_trayNoticeShown) {
+        g_trayNoticeShown = true;
+        TrayBalloon(L"ImapKit Desktop is still running",
+                    L"The server keeps listening. Click this icon to open the window, right-click it to stop the server or exit.");
+    }
+}
+
+void ShowTrayMenu() {
+    int id = TrayMenu(g_main, {{IDM_TRAY_OPEN, L"&Open ImapKit Desktop"},
+                               {IDM_TRAY_TOGGLE_SERVER, g_running ? L"&Stop Server" : L"&Start Server"},
+                               {0, L""},
+                               {IDM_EXIT, L"E&xit"}});
+    if (id) {
+        SendMessageW(g_main, WM_COMMAND, id, 0);
+    }
+}
 
 void ShowPage(int index) {
     if (index == g_current) {
@@ -136,10 +173,13 @@ void OnCreate(HWND hwnd) {
                 swprintf_s(text, L"Running: IMAP %d, IMAPS %d, SMTP %d", data.value("imapPort", 0), data.value("imapsPort", 0),
                            data.value("smtpPort", 0));
                 SetStatus(STATUS_SERVER, text);
+                TraySetTip(std::wstring(L"ImapKit Desktop\n") + text);
             } else {
                 std::wstring error = JsonText(data, "error");
                 SetStatus(STATUS_SERVER, error.empty() ? L"Stopped" : L"Stopped: " + error);
+                TraySetTip(L"ImapKit Desktop\nServer stopped");
             }
+            g_running = data.value("running", false);
         } else if (name == "log" && data.value("level", "") == "error") {
             SetStatus(STATUS_INFO, JsonText(data, "message"));
         }
@@ -153,6 +193,9 @@ void OnCreate(HWND hwnd) {
         MessageBoxW(hwnd, error.c_str(), kTitle, MB_ICONERROR);
         SetStatus(STATUS_SERVER, L"Sidecar not running");
     }
+
+    g_taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
+    TrayAdd(hwnd, SmallIcon(), L"ImapKit Desktop");
 
     Layout();
     ShowPage(0);
@@ -182,6 +225,10 @@ void CheckForUpdates(HWND hwnd) {
 }
 
 LRESULT CALLBACK MainProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    if (message == g_taskbarCreated && g_taskbarCreated) {
+        TrayAdd(hwnd, SmallIcon(), L"ImapKit Desktop");
+        return 0;
+    }
     switch (message) {
         case WM_CREATE:
             OnCreate(hwnd);
@@ -201,8 +248,33 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
             return 0;
         }
+        case WM_SYSCOMMAND:
+            // the close button, Alt+F4 and Close window on the taskbar; File > Exit, the tray menu and the installer
+            // (taskkill) send WM_CLOSE and quit
+            if ((wParam & 0xFFF0) == SC_CLOSE && g_running) {
+                HideToTray();
+                return 0;
+            }
+            break;
+        case WM_TRAY:
+            if (LOWORD(lParam) == WM_LBUTTONUP) {
+                ShowMainWindow();
+            } else if (LOWORD(lParam) == WM_RBUTTONUP) {
+                ShowTrayMenu();
+            }
+            return 0;
+        case WM_SHOW_APP:
+            ShowMainWindow();
+            return 0;
         case WM_COMMAND:
             switch (LOWORD(wParam)) {
+                case IDM_TRAY_OPEN:
+                    ShowMainWindow();
+                    break;
+                case IDM_TRAY_TOGGLE_SERVER:
+                    // with the saved settings, as the Server page would
+                    TheSidecar().Call(g_running ? "stop" : "start", json::object(), ErrorReporter(hwnd, g_running ? L"Stop" : L"Start"));
+                    break;
                 case IDM_EXIT:
                     SendMessageW(hwnd, WM_CLOSE, 0, 0);
                     break;
@@ -259,8 +331,16 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         case WM_SIDECAR_EXIT:
             SetStatus(STATUS_SERVER, L"Sidecar exited with code " + std::to_wstring(wParam));
             return 0;
+        case WM_ENDSESSION:
+            // Windows signs out or shuts down: save like on exit, the process ends after this
+            if (wParam) {
+                TrayRemove();
+                TheSidecar().Stop();
+            }
+            return 0;
         case WM_CLOSE:
             SetStatus(STATUS_INFO, L"Saving...");
+            TrayRemove();
             TheSidecar().Stop();
             DestroyWindow(hwnd);
             return 0;
@@ -280,6 +360,14 @@ void SetStatus(StatusPart part, const std::wstring& text) {
 }
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
+    // one copy per user: a second start shows the running one, which may be in the notification area
+    if (HWND running = FindWindowW(kMainClass, nullptr)) {
+        DWORD process = 0;
+        GetWindowThreadProcessId(running, &process);
+        AllowSetForegroundWindow(process);
+        PostMessageW(running, WM_SHOW_APP, 0, 0);
+        return 0;
+    }
     // WebView2 needs a single threaded apartment
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     // GDI+ draws the antialiased paperclip of the message list
