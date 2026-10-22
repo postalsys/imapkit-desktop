@@ -1,4 +1,4 @@
-// ImapKit Desktop: the main window with the Server, Connections and Messages pages
+// ImapKit Desktop: the main window with the Server, Connections, Messages and Client pages
 #include "app.h"
 
 #include <objbase.h>
@@ -24,6 +24,7 @@ enum MenuId {
     IDM_VIEW_SERVER,
     IDM_VIEW_CONNECTIONS,
     IDM_VIEW_MESSAGES,
+    IDM_VIEW_CLIENT,
     IDM_ABOUT,
     IDM_IMPORT_MAILBOXES,
     IDM_EXPORT_MAILBOXES,
@@ -39,14 +40,15 @@ const wchar_t* kTitle = L"ImapKit Desktop";
 HWND g_main = nullptr;
 HWND g_tabs = nullptr;
 HWND g_status = nullptr;
-Page* g_pages[3] = {};
+constexpr int kPageCount = 4;
+Page* g_pages[kPageCount] = {};
 int g_current = -1;
 
 void ShowPage(int index) {
     if (index == g_current) {
         return;
     }
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < kPageCount; i++) {
         ShowWindow(g_pages[i]->hwnd(), i == index ? SW_SHOW : SW_HIDE);
     }
     TabCtrl_SetCurSel(g_tabs, index);
@@ -88,6 +90,7 @@ HMENU BuildMenu() {
     AppendMenuW(view, MF_STRING, IDM_VIEW_SERVER, L"&Server\tCtrl+1");
     AppendMenuW(view, MF_STRING, IDM_VIEW_CONNECTIONS, L"&Connections\tCtrl+2");
     AppendMenuW(view, MF_STRING, IDM_VIEW_MESSAGES, L"&Messages\tCtrl+3");
+    AppendMenuW(view, MF_STRING, IDM_VIEW_CLIENT, L"C&lient\tCtrl+4");
     HMENU help = CreatePopupMenu();
     AppendMenuW(help, MF_STRING, IDM_CHECK_UPDATES, L"Check for &Updates...");
     AppendMenuW(help, MF_SEPARATOR, 0, nullptr);
@@ -108,8 +111,8 @@ void OnCreate(HWND hwnd) {
     g_tabs = CreateWindowExW(0, WC_TABCONTROLW, L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP, 0, 0, 0, 0, hwnd,
                              nullptr, GetModuleHandleW(nullptr), nullptr);
     SendMessageW(g_tabs, WM_SETFONT, reinterpret_cast<WPARAM>(UiFont()), TRUE);
-    const wchar_t* names[3] = {L"Server", L"Connections", L"Messages"};
-    for (int i = 0; i < 3; i++) {
+    const wchar_t* names[kPageCount] = {L"Server", L"Connections", L"Messages", L"Client"};
+    for (int i = 0; i < kPageCount; i++) {
         TCITEMW item = {};
         item.mask = TCIF_TEXT;
         item.pszText = const_cast<wchar_t*>(names[i]);
@@ -119,6 +122,7 @@ void OnCreate(HWND hwnd) {
     g_pages[0] = CreateServerPage();
     g_pages[1] = CreateConnectionsPage();
     g_pages[2] = CreateMessagesPage();
+    g_pages[3] = CreateClientPage();
     for (Page* page : g_pages) {
         page->Create(hwnd);
         // above the tab control, which draws the frame around them
@@ -229,6 +233,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                 case IDM_VIEW_SERVER:
                 case IDM_VIEW_CONNECTIONS:
                 case IDM_VIEW_MESSAGES:
+                case IDM_VIEW_CLIENT:
                     ShowPage(LOWORD(wParam) - IDM_VIEW_SERVER);
                     break;
                 case IDM_ABOUT:
@@ -305,8 +310,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         {FCONTROL | FVIRTKEY, '1', IDM_VIEW_SERVER},
         {FCONTROL | FVIRTKEY, '2', IDM_VIEW_CONNECTIONS},
         {FCONTROL | FVIRTKEY, '3', IDM_VIEW_MESSAGES},
+        {FCONTROL | FVIRTKEY, '4', IDM_VIEW_CLIENT},
     };
-    HACCEL accelerators = CreateAcceleratorTableW(keys, 3);
+    HACCEL accelerators = CreateAcceleratorTableW(keys, static_cast<int>(std::size(keys)));
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {

@@ -180,3 +180,4 @@ private:
 Page* CreateServerPage();
 Page* CreateConnectionsPage();
 Page* CreateMessagesPage();
+Page* CreateClientPage();

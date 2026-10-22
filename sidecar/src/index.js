@@ -18,6 +18,7 @@ import { parseArgs } from 'node:util';
 import imapkit, { quirks, validateStorage } from 'imapkit';
 import { MailServer } from './mail-server.js';
 import { Outbox, OUTBOX } from './outbox.js';
+import { RawClient, clientPresets } from './raw-client.js';
 import addressparser from 'nodemailer/lib/addressparser/index.js';
 import { summarize, parseMessage, sourceDocument, readAttachment, readAttachments, composeMessage } from './messages.js';
 import { DEFAULT_CONFIG, defaultStorage } from './defaults.js';
@@ -57,9 +58,15 @@ function writeJson(file, value) {
 
 const outbox = new Outbox(readJson(outboxFile, []));
 const server = new MailServer(Object.assign({}, DEFAULT_CONFIG, readJson(configFile, {})), readJson(storageFile, null) || defaultStorage(), outbox);
+// the connection of the Client page
+const rawClient = new RawClient(
+    data => send({ event: 'client', data }),
+    resume => process.stdout.once('drain', resume)
+);
 
+// false when the pipe to the GUI is full
 function send(message) {
-    process.stdout.write(JSON.stringify(message) + '\n');
+    return process.stdout.write(JSON.stringify(message) + '\n');
 }
 
 // mailbox changes are saved a moment later, a burst of changes is written once
@@ -390,7 +397,15 @@ const methods = {
         const release = await res.json();
         const latest = String(release.tag_name || '').replace(/^v/, '');
         return { current: VERSION, latest, newer: compareVersions(latest, VERSION) > 0, url: release.html_url };
-    }
+    },
+
+    clientPresets: () => clientPresets(server.config),
+
+    clientConnect: params => rawClient.connect(params),
+
+    clientSend: params => rawClient.send(params),
+
+    clientDisconnect: () => rawClient.disconnect()
 };
 
 /**
@@ -498,6 +513,7 @@ input.on('line', line => {
 
 // the GUI closed the pipe: it exited or crashed, save and go
 input.on('close', async () => {
+    rawClient.disconnect();
     await server.stop().catch(() => false);
     saveNow();
     process.exit(0);

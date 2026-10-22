@@ -55,5 +55,5 @@ export function startSidecar(dataDir) {
             waiters.push(check);
             check();
         });
-    return { child, call, waitFor };
+    return { child, call, waitFor, events };
 }

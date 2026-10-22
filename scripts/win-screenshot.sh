@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Takes a screenshot of the app window on the Windows machine and copies it here: scripts/win-screenshot.sh out.png
-# DESKTOP=1 takes the whole desktop instead, PAGE=0|1|2 switches to the Server, Connections or Messages page first,
+# DESKTOP=1 takes the whole desktop instead, PAGE=0|1|2|3 switches to the Server, Connections, Messages or Client page first,
 # KEYS=40,40 sends these virtual keys to the list view of that page (40 is Down), RESIZE=800x600,1120x760 resizes the
 # window in turn, COMMAND=405 sends that control id as WM_COMMAND to the visible page
 set -euo pipefail

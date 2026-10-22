@@ -37,6 +37,7 @@ add_executable(ImapKitDesktop WIN32
     src/server_page.cpp
     src/connections_page.cpp
     src/messages_page.cpp
+    src/client_page.cpp
     src/preview.cpp
     src/dialog.cpp
     res/app.rc

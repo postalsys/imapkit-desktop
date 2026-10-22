@@ -1,5 +1,5 @@
 # Saves a screenshot as PNG: of the app window (made topmost for a moment, so other windows do not cover it and the
-# WebView2 content is on screen), or of the whole desktop with -Desktop. -Page 0, 1 or 2 switches the app to the Server, Connections or Messages page first.
+# WebView2 content is on screen), or of the whole desktop with -Desktop. -Page 0, 1, 2 or 3 switches the app to the Server, Connections, Messages or Client page first.
 # At full resolution also on scaled displays
 # -ListKeys "40,40" posts these virtual keys (40 is Down) to the visible list view of the page, to select a message.
 # -Resize "800x600,1120x760" resizes the window to these sizes in turn, -PageCommand 405 sends a WM_COMMAND with that
