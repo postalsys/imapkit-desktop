@@ -81,6 +81,32 @@ describe('sidecar', () => {
         assert.strictEqual((await sidecar.call('messages', { path: 'Trash' })).length, 0);
     });
 
+    it('keeps mail of a client that logged in to SMTP in the Outbox, with its envelope', async () => {
+        const inboxBefore = (await sidecar.call('messages', { path: 'INBOX' })).length;
+        const transport = nodemailer.createTransport({
+            host: '127.0.0.1',
+            port: ports.smtpPort,
+            secure: false,
+            tls: { rejectUnauthorized: false },
+            auth: { user: 'testuser', pass: 'testpass' }
+        });
+        await transport.sendMail({ from: 'me@example.com', to: 'you@example.com', bcc: 'hidden@example.com', subject: 'Sent by a client', text: 'Hi' });
+        await sidecar.waitFor(event => event.event === 'store' && event.data.type === 'outbox');
+
+        assert.deepStrictEqual(await sidecar.call('outboxStatus'), { messages: 1 });
+        assert.strictEqual((await sidecar.call('messages', { path: 'INBOX' })).length, inboxBefore, 'nothing was delivered to INBOX');
+        const [sent] = await sidecar.call('messages', { path: '\\Outbox' });
+        assert.strictEqual(sent.subject, 'Sent by a client');
+        const parsed = await sidecar.call('message', { path: '\\Outbox', uid: sent.uid });
+        assert.deepStrictEqual(parsed.envelope, { from: 'me@example.com', to: ['you@example.com', 'hidden@example.com'] });
+        assert.strictEqual(parsed.user, 'testuser');
+
+        // moving it out delivers it
+        const moved = await sidecar.call('moveMessages', { path: '\\Outbox', uids: [sent.uid], target: 'INBOX' });
+        assert.deepStrictEqual(await sidecar.call('outboxStatus'), { messages: 0 });
+        await sidecar.call('deleteMessages', { path: 'INBOX', uids: [moved.uids[0].targetUid] });
+    });
+
     it('keeps the mailboxes on disk after stop', async () => {
         await sidecar.call('stop');
         const saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'storage.json'), 'utf8'));

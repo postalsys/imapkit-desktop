@@ -17,6 +17,8 @@ import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
 import imapkit, { quirks, validateStorage } from 'imapkit';
 import { MailServer } from './mail-server.js';
+import { Outbox, OUTBOX } from './outbox.js';
+import addressparser from 'nodemailer/lib/addressparser/index.js';
 import { summarize, parseMessage, sourceDocument, readAttachment, readAttachments, composeMessage } from './messages.js';
 import { DEFAULT_CONFIG, defaultStorage } from './defaults.js';
 
@@ -36,6 +38,7 @@ const { values: args } = parseArgs({ options: { 'data-dir': { type: 'string' }, 
 const dataDir = args['data-dir'] || (process.env.APPDATA ? path.join(process.env.APPDATA, 'ImapKitDesktop') : path.join(os.homedir(), '.imapkit-desktop'));
 const configFile = path.join(dataDir, 'config.json');
 const storageFile = path.join(dataDir, 'storage.json');
+const outboxFile = path.join(dataDir, 'outbox.json');
 
 function readJson(file, fallback) {
     try {
@@ -52,7 +55,8 @@ function writeJson(file, value) {
     fs.renameSync(file + '.tmp', file);
 }
 
-const server = new MailServer(Object.assign({}, DEFAULT_CONFIG, readJson(configFile, {})), readJson(storageFile, null) || defaultStorage());
+const outbox = new Outbox(readJson(outboxFile, []));
+const server = new MailServer(Object.assign({}, DEFAULT_CONFIG, readJson(configFile, {})), readJson(storageFile, null) || defaultStorage(), outbox);
 
 function send(message) {
     process.stdout.write(JSON.stringify(message) + '\n');
@@ -70,6 +74,7 @@ function saveNow() {
     saveTimer = null;
     try {
         writeJson(storageFile, server.snapshot());
+        writeJson(outboxFile, outbox);
     } catch (err) {
         send({ event: 'log', data: { level: 'error', message: 'Saving the mailboxes failed: ' + err.message } });
     }
@@ -79,6 +84,21 @@ for (const name of ['status', 'session', 'trace', 'store', 'log']) {
     server.on(name, data => send({ event: name, data }));
 }
 server.on('store', saveSoon);
+outbox.on('change', () => {
+    send({ event: 'store', data: { type: 'outbox', path: OUTBOX } });
+    saveSoon();
+});
+
+/**
+ * A message of a mailbox, or of the Outbox
+ *
+ * @param {String} mailbox Mailbox path, or OUTBOX
+ * @param {Number} uid UID, or the id of an Outbox message
+ * @return {Object} the message in the shape of control.getMessage()
+ */
+function messageOf(mailbox, uid) {
+    return mailbox === OUTBOX ? outbox.get(uid) : server.control.getMessage(mailbox, uid);
+}
 
 /**
  * Replaces every mailbox, restarting the servers when they run (their sessions see a new server)
@@ -234,9 +254,19 @@ const methods = {
 
     deleteMailbox: params => server.control.deleteMailbox(params.path),
 
-    messages: params => server.control.listMessages(params.path, { raw: true }).map(summarize),
+    messages: params => (params.path === OUTBOX ? outbox.list() : server.control.listMessages(params.path, { raw: true })).map(summarize),
+
+    // the number of messages in the Outbox, for the folder tree
+    outboxStatus: () => ({ messages: outbox.messages.length }),
+
+    emptyOutbox: () => outbox.remove(outbox.messages.map(message => message.uid)),
 
     message: async params => {
+        if (params.path === OUTBOX) {
+            // with the SMTP envelope: the recipients of a Bcc are only there
+            const message = outbox.get(params.uid);
+            return Object.assign(await parseMessage(message, !!params.remoteImages), { envelope: message.envelope, user: message.user });
+        }
         const message = server.control.getMessage(params.path, params.uid);
         if (params.markSeen && !message.flags.includes('\\Seen')) {
             server.control.setFlags(params.path, [params.uid], ['\\Seen'], 'add');
@@ -245,13 +275,25 @@ const methods = {
         return parseMessage(message, !!params.remoteImages);
     },
 
-    messageSource: params => ({ sourceHtml: sourceDocument(server.control.getMessage(params.path, params.uid).raw) }),
+    messageSource: params => ({ sourceHtml: sourceDocument(messageOf(params.path, params.uid).raw) }),
 
-    setFlags: params => server.control.setFlags(params.path, params.uids, params.flags, params.mode || 'set'),
+    // the Outbox keeps no flags
+    setFlags: params => (params.path === OUTBOX ? [] : server.control.setFlags(params.path, params.uids, params.flags, params.mode || 'set')),
 
-    moveMessages: params => server.control.moveMessages(params.path, params.uids, params.target),
+    moveMessages: params => {
+        if (params.path !== OUTBOX) {
+            return server.control.moveMessages(params.path, params.uids, params.target);
+        }
+        // out of the Outbox: delivered into the mailbox like an incoming message
+        const uids = params.uids.map(uid => ({ uid, targetUid: server.control.addMessage(params.target, { raw: outbox.get(uid).raw }).uid }));
+        outbox.remove(params.uids);
+        return { uids };
+    },
 
     deleteMessages: params => {
+        if (params.path === OUTBOX) {
+            return outbox.remove(params.uids);
+        }
         const trash = trashPath();
         if (trash && trash !== params.path) {
             return server.control.moveMessages(params.path, params.uids, trash);
@@ -262,24 +304,37 @@ const methods = {
     addMessage: params => server.control.addMessage(params.path, { raw: Buffer.from(params.raw, params.encoding === 'base64' ? 'base64' : 'utf8') }),
 
     // adds .eml files to a mailbox, returns the new UIDs
-    importMessages: params => params.files.map(file => server.control.addMessage(params.path, { raw: fs.readFileSync(file) }).uid),
+    importMessages: params =>
+        params.files.map(file =>
+            params.path === OUTBOX
+                ? outbox.add(fs.readFileSync(file), { from: '', to: [] }, null).uid
+                : server.control.addMessage(params.path, { raw: fs.readFileSync(file) }).uid
+        ),
 
-    composeMessage: async params => server.control.addMessage(params.path, { raw: await composeMessage(params), flags: params.flags || [] }),
+    composeMessage: async params => {
+        const raw = await composeMessage(params);
+        if (params.path === OUTBOX) {
+            // as if a client sent it: the envelope has every recipient
+            const addresses = text => addressparser(text || '', { flatten: true }).map(address => address.address);
+            return outbox.add(raw, { from: addresses(params.from)[0] || '', to: addresses(params.to).concat(addresses(params.cc)) }, null);
+        }
+        return server.control.addMessage(params.path, { raw, flags: params.flags || [] });
+    },
 
     saveMessage: params => {
-        fs.writeFileSync(params.file, server.control.getMessage(params.path, params.uid).raw);
+        fs.writeFileSync(params.file, messageOf(params.path, params.uid).raw);
         return true;
     },
 
     saveAttachment: async params => {
-        fs.writeFileSync(params.file, await readAttachment(server.control.getMessage(params.path, params.uid), params.index));
+        fs.writeFileSync(params.file, await readAttachment(messageOf(params.path, params.uid), params.index));
         return true;
     },
 
     // writes every attachment into a folder, existing files are not replaced. Returns the names written
     saveAttachments: async params => {
         const written = [];
-        for (const { filename, content } of await readAttachments(server.control.getMessage(params.path, params.uid))) {
+        for (const { filename, content } of await readAttachments(messageOf(params.path, params.uid))) {
             let name = filename;
             for (let n = 2; fs.existsSync(path.join(params.dir, name)); n++) {
                 const dot = filename.lastIndexOf('.');

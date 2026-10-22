@@ -47,11 +47,14 @@ export class MailServer extends EventEmitter {
     /**
      * @param {Object} config Settings, see DEFAULT_CONFIG
      * @param {Object} storage The mailboxes to start with, in the shape of the imapkit storage option
+     * @param {Outbox} outbox Keeps the mail that clients send after logging in
      */
-    constructor(config, storage) {
+    constructor(config, storage, outbox) {
         super();
         this.config = config;
         this.storage = storage;
+        // where authenticated SMTP mail goes, see outbox.js
+        this.outbox = outbox;
         this.imap = null;
         this.smtp = null;
         this.running = false;
@@ -304,8 +307,9 @@ export class MailServer extends EventEmitter {
     }
 
     /**
-     * An SMTP server that accepts any sender, recipient and login and delivers every message to INBOX. Its protocol
-     * log comes from the logger of smtp-server, which redacts AUTH credentials
+     * An SMTP server that accepts any sender, recipient and login. Mail of a session that logged in goes to the Outbox,
+     * other mail is delivered to INBOX. Its protocol log comes from the logger of smtp-server, which redacts AUTH
+     * credentials
      *
      * @return {SMTPServer} server
      */
@@ -372,8 +376,19 @@ export class MailServer extends EventEmitter {
                         this.emitTrace(id, 'in', '[message of ' + raw.length + ' bytes]\r\n');
                     }
                     try {
-                        const { uid } = this.imap.control.addMessage('INBOX', { raw });
-                        done(null, 'Message delivered to INBOX as UID ' + uid);
+                        if (session.user) {
+                            // a client that logged in submits mail it sends, like to the submission server of a provider
+                            const envelope = {
+                                from: session.envelope.mailFrom ? session.envelope.mailFrom.address : '',
+                                to: session.envelope.rcptTo.map(recipient => recipient.address)
+                            };
+                            const { uid } = this.outbox.add(raw, envelope, (typeof session.user === 'string' ? session.user : session.user.user) || null);
+                            done(null, 'Message kept in the Outbox as message ' + uid + ', not delivered');
+                        } else {
+                            // without a login it is incoming mail from another server
+                            const { uid } = this.imap.control.addMessage('INBOX', { raw });
+                            done(null, 'Message delivered to INBOX as UID ' + uid);
+                        }
                     } catch (err) {
                         done(err);
                     }

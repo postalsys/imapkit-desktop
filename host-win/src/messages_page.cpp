@@ -42,12 +42,17 @@ enum ControlId {
     IDM_NEW_FOLDER,
     IDM_RENAME_FOLDER,
     IDM_DELETE_FOLDER,
+    IDM_EMPTY_OUTBOX,
     // Move to: IDM_MOVE_FIRST + folder index, Save attachment: IDM_ATTACHMENT_FIRST + attachment index
     IDM_MOVE_FIRST = 600,
     IDM_ATTACHMENT_FIRST = 900,
 };
 
 constexpr int kMaxAttachmentItems = 100;
+
+// the path of the Outbox in the methods of the sidecar, and its item in the folder tree
+const char* const kOutbox = "\\Outbox";
+constexpr LPARAM kOutboxItem = -2;
 
 // the columns of the message list
 enum Column { kAttachmentColumn, kFlagColumn, kFromColumn, kSubjectColumn, kReceivedColumn, kSizeColumn };
@@ -219,6 +224,11 @@ protected:
                 break;
             case IDM_RENAME_FOLDER:
                 RenameFolder();
+                break;
+            case IDM_EMPTY_OUTBOX:
+                if (MessageBoxW(hwnd_, L"Delete every message in the Outbox?", L"Empty Outbox", MB_ICONWARNING | MB_OKCANCEL) == IDOK) {
+                    TheSidecar().Call("emptyOutbox", json::object(), ErrorReporter(hwnd_, L"Empty Outbox"));
+                }
                 break;
             case IDM_DELETE_FOLDER:
                 DeleteFolder();
@@ -506,6 +516,14 @@ private:
                 BuildTree();
             }
         });
+        TheSidecar().Call("outboxStatus", json::object(), [this](const json& result, const std::string& error) {
+            if (error.empty()) {
+                outbox_.unseen = result.value("messages", 0);
+                if (outboxItem_) {
+                    UpdateTreeItem(outboxItem_, outbox_);
+                }
+            }
+        });
     }
 
     void UpdateTreeItem(HTREEITEM handle, const Folder& folder) {
@@ -550,6 +568,17 @@ private:
             TreeView_Expand(tree_, insert.hParent, TVE_EXPAND);
         }
 
+        // the mail that clients sent with a login to SMTP, next to the mailboxes like the Outbox of Outlook Express
+        TVINSERTSTRUCTW outbox = {};
+        outbox.hParent = TVI_ROOT;
+        outbox.hInsertAfter = TVI_LAST;
+        outbox.item.mask = TVIF_TEXT | TVIF_PARAM;
+        outbox.item.pszText = const_cast<wchar_t*>(L"Outbox");
+        outbox.item.lParam = kOutboxItem;
+        outboxItem_ = TreeView_InsertItem(tree_, &outbox);
+        UpdateTreeItem(outboxItem_, outbox_);
+        byPath[kOutbox] = outboxItem_;
+
         // the folder that was open, or Inbox when it is gone (deleted by a client) or nothing was open yet
         auto open = byPath.find(current_);
         if (open == byPath.end()) {
@@ -571,6 +600,9 @@ private:
         item.mask = TVIF_PARAM;
         item.hItem = handle;
         TreeView_GetItem(tree_, &item);
+        if (item.lParam == kOutboxItem) {
+            return &outbox_;
+        }
         size_t index = static_cast<size_t>(item.lParam);
         return index < folders_.size() ? &folders_[index] : nullptr;
     }
@@ -763,7 +795,16 @@ private:
             for (const auto& attachment : CurrentAttachments()) {
                 files += (files.empty() ? L"" : L", ") + AttachmentText(attachment);
             }
-            SetHeader({JsonText(result, "from"), cc.empty() ? to : to + L"; Cc: " + cc, JsonText(result, "subject"), files});
+            std::wstring recipients = cc.empty() ? to : to + L"; Cc: " + cc;
+            // a message of the Outbox went to the recipients of its SMTP envelope, Bcc included
+            if (result.contains("envelope")) {
+                std::wstring envelope;
+                for (const auto& address : result["envelope"].value("to", json::array())) {
+                    envelope += (envelope.empty() ? L"" : L", ") + Widen(address.get<std::string>());
+                }
+                recipients += L"   (SMTP recipients: " + envelope + L")";
+            }
+            SetHeader({JsonText(result, "from"), recipients, JsonText(result, "subject"), files});
             ShowCurrentDocument();
         });
     }
@@ -861,17 +902,20 @@ private:
     void ShowMessageMenu(POINT at) {
         size_t count = SelectedUids().size();
         UINT enabled = count ? 0 : MF_GRAYED;
+        // the Outbox keeps no flags
+        UINT flags = count && current_ != kOutbox ? 0 : MF_GRAYED;
         HMENU move = CreatePopupMenu();
         for (size_t i = 0; i < folders_.size(); i++) {
             AppendMenuW(move, MF_STRING | (folders_[i].path == current_ ? MF_GRAYED : 0), IDM_MOVE_FIRST + i, folders_[i].name.c_str());
         }
         HMENU menu = CreatePopupMenu();
-        AppendMenuW(menu, MF_STRING | enabled, IDC_MARK_READ, L"Mark as &Read");
-        AppendMenuW(menu, MF_STRING | enabled, IDC_MARK_UNREAD, L"Mark as &Unread");
-        AppendMenuW(menu, MF_STRING | enabled, IDM_FLAG, L"&Flag");
-        AppendMenuW(menu, MF_STRING | enabled, IDM_UNFLAG, L"U&nflag");
+        AppendMenuW(menu, MF_STRING | flags, IDC_MARK_READ, L"Mark as &Read");
+        AppendMenuW(menu, MF_STRING | flags, IDC_MARK_UNREAD, L"Mark as &Unread");
+        AppendMenuW(menu, MF_STRING | flags, IDM_FLAG, L"&Flag");
+        AppendMenuW(menu, MF_STRING | flags, IDM_UNFLAG, L"U&nflag");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(menu, MF_POPUP | enabled, reinterpret_cast<UINT_PTR>(move), L"&Move to");
+        // out of the Outbox a message is delivered into the folder
+        AppendMenuW(menu, MF_POPUP | enabled, reinterpret_cast<UINT_PTR>(move), current_ == kOutbox ? L"&Deliver to" : L"&Move to");
         AppendMenuW(menu, MF_STRING | (count == 1 ? 0 : MF_GRAYED), IDM_SAVE_AS, L"&Save As...");
         if (count == 1 && !CurrentAttachments().empty()) {
             AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(AttachmentMenu()), L"Save a&ttachment");
@@ -1001,6 +1045,13 @@ private:
         }
         const Folder* folder = SelectedFolder();
         HMENU menu = CreatePopupMenu();
+        if (folder == &outbox_) {
+            AppendMenuW(menu, MF_STRING | (outbox_.unseen ? 0 : MF_GRAYED), IDM_EMPTY_OUTBOX, L"&Empty Outbox...");
+            RECT anchor = {};
+            TreeView_GetItemRect(tree_, outboxItem_, &anchor, TRUE);
+            TrackContextMenu(menu, hwnd_, tree_, at, anchor);
+            return;
+        }
         AppendMenuW(menu, MF_STRING, IDM_NEW_FOLDER, L"&New Folder...");
         AppendMenuW(menu, MF_STRING | (folder && folder->canRename ? 0 : MF_GRAYED), IDM_RENAME_FOLDER, L"&Rename...");
         AppendMenuW(menu, MF_STRING | (folder && folder->canDelete ? 0 : MF_GRAYED), IDM_DELETE_FOLDER, L"&Delete");
@@ -1109,6 +1160,9 @@ private:
     Preview preview_;
 
     std::vector<Folder> folders_;
+    // the Outbox in the tree, `unseen` holds its number of messages
+    Folder outbox_ = {kOutbox, "", L"Outbox", 0, false, false};
+    HTREEITEM outboxItem_ = nullptr;
     std::vector<HTREEITEM> treeItems_;
     std::vector<Summary> messages_;
     std::unordered_map<int, size_t> uidIndex_;
