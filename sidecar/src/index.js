@@ -84,8 +84,9 @@ for (const name of ['status', 'session', 'trace', 'store', 'log']) {
     server.on(name, data => send({ event: name, data }));
 }
 server.on('store', saveSoon);
-outbox.on('change', () => {
-    send({ event: 'store', data: { type: 'outbox', path: OUTBOX } });
+outbox.on('change', changed => {
+    // a flag change comes with the messages, the GUI updates its rows without a reload
+    send({ event: 'store', data: changed ? { type: 'flags', path: OUTBOX, messages: changed } : { type: 'outbox', path: OUTBOX } });
     saveSoon();
 });
 
@@ -257,13 +258,16 @@ const methods = {
     messages: params => (params.path === OUTBOX ? outbox.list() : server.control.listMessages(params.path, { raw: true })).map(summarize),
 
     // the number of messages in the Outbox, for the folder tree
-    outboxStatus: () => ({ messages: outbox.messages.length }),
+    outboxStatus: () => ({ messages: outbox.messages.length, unseen: outbox.unseen() }),
 
     emptyOutbox: () => outbox.remove(outbox.messages.map(message => message.uid)),
 
     message: async params => {
         if (params.path === OUTBOX) {
             // with the SMTP envelope: the recipients of a Bcc are only there
+            if (params.markSeen) {
+                outbox.setFlags([params.uid], ['\\Seen'], 'add');
+            }
             const message = outbox.get(params.uid);
             return Object.assign(await parseMessage(message, !!params.remoteImages), { envelope: message.envelope, user: message.user });
         }
@@ -277,8 +281,10 @@ const methods = {
 
     messageSource: params => ({ sourceHtml: sourceDocument(messageOf(params.path, params.uid).raw) }),
 
-    // the Outbox keeps no flags
-    setFlags: params => (params.path === OUTBOX ? [] : server.control.setFlags(params.path, params.uids, params.flags, params.mode || 'set')),
+    setFlags: params =>
+        params.path === OUTBOX
+            ? outbox.setFlags(params.uids, params.flags, params.mode || 'set')
+            : server.control.setFlags(params.path, params.uids, params.flags, params.mode || 'set'),
 
     moveMessages: params => {
         if (params.path !== OUTBOX) {

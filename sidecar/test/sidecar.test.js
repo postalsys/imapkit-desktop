@@ -93,17 +93,20 @@ describe('sidecar', () => {
         await transport.sendMail({ from: 'me@example.com', to: 'you@example.com', bcc: 'hidden@example.com', subject: 'Sent by a client', text: 'Hi' });
         await sidecar.waitFor(event => event.event === 'store' && event.data.type === 'outbox');
 
-        assert.deepStrictEqual(await sidecar.call('outboxStatus'), { messages: 1 });
+        assert.deepStrictEqual(await sidecar.call('outboxStatus'), { messages: 1, unseen: 1 });
         assert.strictEqual((await sidecar.call('messages', { path: 'INBOX' })).length, inboxBefore, 'nothing was delivered to INBOX');
         const [sent] = await sidecar.call('messages', { path: '\\Outbox' });
         assert.strictEqual(sent.subject, 'Sent by a client');
         const parsed = await sidecar.call('message', { path: '\\Outbox', uid: sent.uid });
         assert.deepStrictEqual(parsed.envelope, { from: 'me@example.com', to: ['you@example.com', 'hidden@example.com'] });
         assert.strictEqual(parsed.user, 'testuser');
+        // opening it marks it read, like in a mailbox
+        await sidecar.call('message', { path: '\\Outbox', uid: sent.uid, markSeen: true });
+        assert.deepStrictEqual(await sidecar.call('outboxStatus'), { messages: 1, unseen: 0 });
 
         // moving it out delivers it
         const moved = await sidecar.call('moveMessages', { path: '\\Outbox', uids: [sent.uid], target: 'INBOX' });
-        assert.deepStrictEqual(await sidecar.call('outboxStatus'), { messages: 0 });
+        assert.deepStrictEqual(await sidecar.call('outboxStatus'), { messages: 0, unseen: 0 });
         await sidecar.call('deleteMessages', { path: 'INBOX', uids: [moved.uids[0].targetUid] });
     });
 

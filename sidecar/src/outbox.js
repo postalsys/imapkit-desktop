@@ -26,7 +26,8 @@ export class Outbox extends EventEmitter {
      * @return {Object} the message
      */
     add(raw, envelope, user) {
-        const message = { uid: this.nextId++, raw, envelope, user, internaldate: new Date().toISOString(), flags: ['\\Seen'] };
+        // unread, like new mail in any folder: the reader sees that a client sent something
+        const message = { uid: this.nextId++, raw, envelope, user, internaldate: new Date().toISOString(), flags: [] };
         this.messages.push(message);
         this.emit('change');
         return message;
@@ -49,6 +50,42 @@ export class Outbox extends EventEmitter {
      */
     list() {
         return this.messages.map(message => Object.assign({ size: message.raw.length }, message));
+    }
+
+    /**
+     * Changes flags of messages, as control.setFlags() does for a mailbox
+     *
+     * @param {Array} uids Message ids
+     * @param {Array} flags Flags
+     * @param {String} mode `set`, `add` or `remove`
+     * @return {Array} `[{ uid, flags }]` of the messages that changed
+     */
+    setFlags(uids, flags, mode) {
+        const changed = [];
+        for (const message of this.messages.filter(entry => uids.includes(entry.uid))) {
+            const before = message.flags.join(' ');
+            if (mode === 'add') {
+                message.flags = [...new Set(message.flags.concat(flags))];
+            } else if (mode === 'remove') {
+                message.flags = message.flags.filter(flag => !flags.includes(flag));
+            } else {
+                message.flags = flags.slice();
+            }
+            if (message.flags.join(' ') !== before) {
+                changed.push({ uid: message.uid, flags: message.flags.slice() });
+            }
+        }
+        if (changed.length) {
+            this.emit('change', changed);
+        }
+        return changed;
+    }
+
+    /**
+     * @return {Number} the number of unread messages
+     */
+    unseen() {
+        return this.messages.filter(message => !message.flags.includes('\\Seen')).length;
     }
 
     /**

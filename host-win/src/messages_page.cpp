@@ -363,7 +363,7 @@ private:
                 // a new column sorts ascending, but dates newest first
                 sortAscending_ = column == sortColumn_ ? !sortAscending_ : column != kReceivedColumn;
                 sortColumn_ = column;
-                FillList();
+                FillList(SelectedUids());
                 return 0;
             }
             case LVN_KEYDOWN:
@@ -518,7 +518,9 @@ private:
         });
         TheSidecar().Call("outboxStatus", json::object(), [this](const json& result, const std::string& error) {
             if (error.empty()) {
-                outbox_.unseen = result.value("messages", 0);
+                // unread messages, like the other folders: bold only while there is something new
+                outbox_.unseen = result.value("unseen", 0);
+                outboxMessages_ = result.value("messages", 0);
                 if (outboxItem_) {
                     UpdateTreeItem(outboxItem_, outbox_);
                 }
@@ -631,6 +633,9 @@ private:
             if (path != current_) {
                 return;
             }
+            // the selection is read while the rows still match messages_, and only kept within the same folder
+            std::vector<int> selected = path == listPath_ ? SelectedUids() : std::vector<int>();
+            listPath_ = path;
             messages_.clear();
             uidIndex_.clear();
             if (error.empty() && result.is_array()) {
@@ -651,7 +656,7 @@ private:
                     messages_.push_back(std::move(summary));
                 }
             }
-            FillList();
+            FillList(selected);
         });
     }
 
@@ -672,8 +677,8 @@ private:
         }
     }
 
-    void FillList() {
-        std::vector<int> selected = SelectedUids();
+    // shows messages_ in the sort order, with the messages of `selected` (UIDs) selected again
+    void FillList(const std::vector<int>& selected) {
         order_.resize(messages_.size());
         for (size_t i = 0; i < order_.size(); i++) {
             order_[i] = i;
@@ -902,17 +907,15 @@ private:
     void ShowMessageMenu(POINT at) {
         size_t count = SelectedUids().size();
         UINT enabled = count ? 0 : MF_GRAYED;
-        // the Outbox keeps no flags
-        UINT flags = count && current_ != kOutbox ? 0 : MF_GRAYED;
         HMENU move = CreatePopupMenu();
         for (size_t i = 0; i < folders_.size(); i++) {
             AppendMenuW(move, MF_STRING | (folders_[i].path == current_ ? MF_GRAYED : 0), IDM_MOVE_FIRST + i, folders_[i].name.c_str());
         }
         HMENU menu = CreatePopupMenu();
-        AppendMenuW(menu, MF_STRING | flags, IDC_MARK_READ, L"Mark as &Read");
-        AppendMenuW(menu, MF_STRING | flags, IDC_MARK_UNREAD, L"Mark as &Unread");
-        AppendMenuW(menu, MF_STRING | flags, IDM_FLAG, L"&Flag");
-        AppendMenuW(menu, MF_STRING | flags, IDM_UNFLAG, L"U&nflag");
+        AppendMenuW(menu, MF_STRING | enabled, IDC_MARK_READ, L"Mark as &Read");
+        AppendMenuW(menu, MF_STRING | enabled, IDC_MARK_UNREAD, L"Mark as &Unread");
+        AppendMenuW(menu, MF_STRING | enabled, IDM_FLAG, L"&Flag");
+        AppendMenuW(menu, MF_STRING | enabled, IDM_UNFLAG, L"U&nflag");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         // out of the Outbox a message is delivered into the folder
         AppendMenuW(menu, MF_POPUP | enabled, reinterpret_cast<UINT_PTR>(move), current_ == kOutbox ? L"&Deliver to" : L"&Move to");
@@ -1046,7 +1049,7 @@ private:
         const Folder* folder = SelectedFolder();
         HMENU menu = CreatePopupMenu();
         if (folder == &outbox_) {
-            AppendMenuW(menu, MF_STRING | (outbox_.unseen ? 0 : MF_GRAYED), IDM_EMPTY_OUTBOX, L"&Empty Outbox...");
+            AppendMenuW(menu, MF_STRING | (outboxMessages_ ? 0 : MF_GRAYED), IDM_EMPTY_OUTBOX, L"&Empty Outbox...");
             RECT anchor = {};
             TreeView_GetItemRect(tree_, outboxItem_, &anchor, TRUE);
             TrackContextMenu(menu, hwnd_, tree_, at, anchor);
@@ -1160,15 +1163,18 @@ private:
     Preview preview_;
 
     std::vector<Folder> folders_;
-    // the Outbox in the tree, `unseen` holds its number of messages
+    // the Outbox in the tree, with its number of unread messages
     Folder outbox_ = {kOutbox, "", L"Outbox", 0, false, false};
     HTREEITEM outboxItem_ = nullptr;
+    int outboxMessages_ = 0;
     std::vector<HTREEITEM> treeItems_;
     std::vector<Summary> messages_;
     std::unordered_map<int, size_t> uidIndex_;
     // rows of the list as positions in messages_
     std::vector<size_t> order_;
     std::string current_;
+    // the folder whose messages are in messages_
+    std::string listPath_;
     int selectedUid_ = 0;
     json currentMessage_;
     std::wstring sourceHtml_;

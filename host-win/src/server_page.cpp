@@ -218,6 +218,7 @@ protected:
         int usersHeight = caption + listHeight + Scale(32) + pad;
         MoveWindow(usersGroup_, left, top, columnWidth, usersHeight, TRUE);
         MoveWindow(usersList_, left + pad, top + caption, columnWidth - 2 * pad, listHeight, TRUE);
+        StretchColumn(usersList_, 1);
         int narrow = Scale(80);
         int buttonTop = top + caption + listHeight + Scale(6);
         MoveWindow(userAdd_, left + pad, buttonTop, narrow, Scale(23), TRUE);
@@ -499,6 +500,8 @@ private:
             ListView_InsertItem(usersList_, &item);
             ListView_SetItemText(usersList_, i, 1, users_[i].password.data());
         }
+        // a vertical scroll bar may have come or gone with the rows
+        StretchColumn(usersList_, 1);
         EnableWindow(userRemove_, users_.size() > 1);
     }
 
