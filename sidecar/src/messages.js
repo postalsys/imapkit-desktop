@@ -2,6 +2,8 @@
 
 import libmime from 'libmime';
 import { simpleParser } from 'mailparser';
+import emailContent from '@postalsys/email-content';
+import { parse as parseHtml } from 'node-html-parser';
 import addressparser from 'nodemailer/lib/addressparser/index.js';
 import MailComposer from 'nodemailer/lib/mail-composer/index.js';
 
@@ -18,6 +20,15 @@ const META = meta(false);
 // an image, a background or a CSS url() from the network
 const REMOTE_IMAGE = /\b(?:src|background|srcset)\s*=\s*["']?\s*(?:https?:)?\/\/|url\(\s*["']?\s*(?:https?:)?\/\//i;
 const BASE_STYLE = '<style>body{font:10pt Arial,sans-serif;margin:8px;}pre{white-space:pre-wrap;word-wrap:break-word;}</style>';
+// the toggle of the folded reply history, a <details> element that needs no script
+const FOLD_STYLE =
+    '<style>details.imapkit-desktop-history{margin-top:12px}details.imapkit-desktop-history>summary{display:inline-block;cursor:pointer;' +
+    'font:8pt Tahoma,sans-serif;color:#444;background:#e8e8e8;border:1px solid #aaa;padding:1px 8px;list-style:none;user-select:none}' +
+    'details.imapkit-desktop-history>summary::-webkit-details-marker{display:none}' +
+    'details.imapkit-desktop-history[open]>summary{margin-bottom:8px}</style>';
+
+// segment types that may fold, and those that must stay visible after the boundary
+const VISIBLE_AFTER_BOUNDARY = new Set(['NEW_CONTENT', 'UNKNOWN']);
 const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
 
 const escapeHtml = text => text.replace(/[&<>"]/g, char => HTML_ESCAPES[char]);
@@ -31,14 +42,111 @@ const document = body => '<!doctype html><html><head>' + META + BASE_STYLE + '</
  *
  * @param {Object} parsed A message of mailparser
  * @param {Boolean} [remoteImages] true lets images from the network load
+ * @param {Object} [fold] reply history to fold away, see findHistory()
  * @return {String} document
  */
-export function previewDocument(parsed, remoteImages = false) {
+export function previewDocument(parsed, remoteImages = false, fold = null) {
     if (typeof parsed.html === 'string' && parsed.html) {
-        return '<!doctype html><html><head>' + meta(remoteImages) + '</head><body>' + parsed.html + '</body></html>';
+        const body = fold ? fold.visible + foldedHistory(fold) : parsed.html;
+        return '<!doctype html><html><head>' + meta(remoteImages) + (fold ? FOLD_STYLE : '') + '</head><body>' + body + '</body></html>';
+    }
+    if (fold) {
+        const pre = text => '<pre style="font:10pt Arial,sans-serif;margin:0">' + escapeHtml(text) + '</pre>';
+        return document(pre(fold.visible) + foldedHistory({ label: fold.label, hidden: pre(fold.hidden) })).replace('</head>', FOLD_STYLE + '</head>');
     }
     // mailparser escapes the text and turns links into anchors
     return document(parsed.textAsHtml || '');
+}
+
+const foldedHistory = fold =>
+    '<details class="imapkit-desktop-history"><summary>&#183;&#183;&#183; ' + escapeHtml(fold.label) + '</summary>' + fold.hidden + '</details>';
+
+/**
+ * Moves a cut of the HTML source to the start of an element, so that the history can be wrapped in an element of
+ * its own: the first element that reaches past the cut and starts after every visible block
+ *
+ * @param {Object} node A node of node-html-parser
+ * @param {Number} cut Offset where the history starts, by the text blocks
+ * @param {Number} visibleEnd Offset where the last visible block ends
+ * @return {Number} offset, -1 when history and visible text share a text node, and no cut works
+ */
+function elementBoundary(node, cut, visibleEnd) {
+    for (const child of node.childNodes) {
+        if (child.range[1] <= cut) {
+            continue;
+        }
+        if (child.range[0] >= visibleEnd) {
+            return child.range[0];
+        }
+        // the child holds visible content and reaches past the cut
+        if (child.nodeType === 3) {
+            return child.text.slice(cut - child.range[0]).trim() ? -1 : -2;
+        }
+        const inner = elementBoundary(child, cut, visibleEnd);
+        if (inner !== -2) {
+            return inner;
+        }
+    }
+    // nothing at this level after the cut, the caller looks at the next sibling
+    return -2;
+}
+
+/**
+ * Finds where the reply history or the forwarded message starts, with @postalsys/email-content. The message is cut
+ * there in its original form: the segments of the library are normalised and would lose the styles of the quote.
+ * Only a boundary after which nothing but history follows is used, new content after it would end up hidden, and
+ * hiding what the sender wrote is worse than showing old quotes
+ *
+ * @param {Object} parsed A message of mailparser
+ * @return {Promise<Object|null>} `{ visible, hidden, label }` in the representation of the preview (HTML when the
+ *   message has HTML, plain text otherwise), null when nothing is folded
+ */
+export async function findHistory(parsed) {
+    const html = typeof parsed.html === 'string' && parsed.html ? parsed.html : null;
+    let result;
+    try {
+        result = await emailContent.analyze({
+            html: html || undefined,
+            text: html ? undefined : parsed.text || undefined,
+            subject: parsed.subject || undefined,
+            from: parsed.from ? parsed.from.text : undefined
+        });
+    } catch {
+        return null;
+    }
+    const segments = result.segments
+        .concat(result.hiddenSegments)
+        .filter(segment => segment.source && segment.source.kind === 'mime-part')
+        .sort((a, b) => a.source.start - b.source.start);
+    const representation = html ? 'html' : 'text';
+    if (
+        !segments.length ||
+        segments.some(segment => segment.source.representation !== representation || segment.source.mimePart !== segments[0].source.mimePart)
+    ) {
+        return null;
+    }
+    const folds = segment => segment.visibility !== 'show' || segment.type === 'FORWARDED_CONTENT';
+    const first = segments.findIndex(folds);
+    if (first <= 0 || segments.slice(first).some(segment => !folds(segment) && VISIBLE_AFTER_BOUNDARY.has(segment.type))) {
+        // nothing to fold, the whole message is history, or new content follows the history
+        return null;
+    }
+    const source = html || result.canonicalText[segments[0].source.mimePart];
+    if (typeof source !== 'string') {
+        return null;
+    }
+    let start = segments[first].source.start;
+    if (html) {
+        // the library cuts between blocks of text, which can be inside a closing tag of the visible part
+        start = elementBoundary(parseHtml(html), start, Math.max(...segments.slice(0, first).map(segment => segment.source.end)));
+        if (start < 0) {
+            // -1: history and visible text share a text node, -2: no element follows the visible content
+            return null;
+        }
+    }
+    const history = segments.slice(first);
+    const forward = history.some(segment => segment.type === 'FORWARDED_CONTENT') && !history.some(segment => segment.type === 'REPLY_HISTORY');
+    return { visible: source.slice(0, start), hidden: source.slice(start), label: forward ? 'Show forwarded message' : 'Show quoted text' };
 }
 
 /**
@@ -170,7 +278,7 @@ export async function parseMessage(message, remoteImages = false) {
             inline: isEmbedded(attachment)
         })),
         remoteImages: typeof parsed.html === 'string' && REMOTE_IMAGE.test(parsed.html),
-        previewHtml: previewDocument(parsed, remoteImages)
+        previewHtml: previewDocument(parsed, remoteImages, await findHistory(parsed))
     };
 }
 

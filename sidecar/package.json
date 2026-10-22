@@ -14,9 +14,11 @@
     },
     "license": "MIT",
     "dependencies": {
+        "@postalsys/email-content": "0.1.17",
         "imapkit": "5.2.0",
         "libmime": "5.6.1",
         "mailparser": "3.12.2",
+        "node-html-parser": "9.0.5",
         "nodemailer": "10.2.0",
         "smtp-server": "3.21.0"
     },

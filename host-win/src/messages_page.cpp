@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <unordered_map>
 
 namespace {
@@ -99,18 +100,9 @@ protected:
 
         list_ = AddControl(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_SHOWSELALWAYS | LVS_OWNERDATA, IDC_MESSAGES, WS_EX_CLIENTEDGE);
         ListView_SetExtendedListViewStyle(list_, LVS_EX_FULLROWSELECT | LVS_EX_HEADERDRAGDROP);
-        // the paperclip is the image of the first column, as in Outlook Express
-        HIMAGELIST clips = ImageList_Create(16, 16, ILC_COLOR24 | ILC_MASK, 1, 0);
-        HBITMAP paperclip = static_cast<HBITMAP>(LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(202), IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION));
-        ImageList_AddMasked(clips, paperclip, RGB(255, 0, 255));
-        DeleteObject(paperclip);
-        ListView_SetImageList(list_, clips, LVSIL_SMALL);
-        AddColumns(list_, {{L"", 24}, {L"!", 20}, {L"From", 180}, {L"Subject", 320}, {L"Received", 120}, {L"Size", 70, LVCFMT_RIGHT}});
-        LVCOLUMNW clipColumn = {};
-        clipColumn.mask = LVCF_FMT | LVCF_IMAGE;
-        clipColumn.fmt = LVCFMT_LEFT | LVCFMT_IMAGE;
-        clipColumn.iImage = 0;
-        ListView_SetColumn(list_, kAttachmentColumn, &clipColumn);
+        // the first column has the paperclip of Outlook Express, drawn in the rows and in the header
+        AddColumns(list_, {{L"", 22}, {L"!", 20}, {L"From", 180}, {L"Subject", 320}, {L"Received", 120}, {L"Size", 70, LVCFMT_RIGHT}});
+        listProc_ = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(list_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(ListProc)));
 
         // the bar of Outlook Express 6 above a message whose pictures it did not download
         infoBar_ = AddControl(L"STATIC",
@@ -364,11 +356,23 @@ private:
                 if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) {
                     return CDRF_NOTIFYITEMDRAW;
                 }
-                // unread messages in bold, as in Outlook Express
-                const Summary* message = MessageAt(static_cast<int>(draw->nmcd.dwItemSpec));
-                if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT && message && !message->seen) {
-                    SelectObject(draw->nmcd.hdc, BoldFont());
-                    return CDRF_NEWFONT;
+                int row = static_cast<int>(draw->nmcd.dwItemSpec);
+                const Summary* message = MessageAt(row);
+                if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT && message) {
+                    LRESULT result = message->attachments ? CDRF_NOTIFYPOSTPAINT : CDRF_DODEFAULT;
+                    // unread messages in bold, as in Outlook Express
+                    if (!message->seen) {
+                        SelectObject(draw->nmcd.hdc, BoldFont());
+                        result |= CDRF_NEWFONT;
+                    }
+                    return result;
+                }
+                if (draw->nmcd.dwDrawStage == CDDS_ITEMPOSTPAINT && message && message->attachments) {
+                    RECT item;
+                    ListView_GetItemRect(list_, row, &item, LVIR_BOUNDS);
+                    RECT cell = {item.left, item.top, item.left + ListView_GetColumnWidth(list_, kAttachmentColumn), item.bottom};
+                    bool highlighted = (ListView_GetItemState(list_, row, LVIS_SELECTED) & LVIS_SELECTED) && GetFocus() == list_;
+                    DrawPaperclip(draw->nmcd.hdc, cell, GetSysColor(highlighted ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT));
                 }
                 return CDRF_DODEFAULT;
             }
@@ -665,9 +669,6 @@ private:
         if (!message) {
             return;
         }
-        if ((item.mask & LVIF_IMAGE) && item.iSubItem == kAttachmentColumn) {
-            item.iImage = message->attachments ? 0 : -1;
-        }
         if (!(item.mask & LVIF_TEXT)) {
             return;
         }
@@ -873,6 +874,60 @@ private:
         TrackContextMenu(menu, hwnd_, list_, at, anchor);
     }
 
+    // the header of the list sends its paint notifications to the list, not to the page: the paperclip of the first
+    // column is drawn here
+    static LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wParam, LPARAM lParam) {
+        if (message == WM_NOTIFY) {
+            auto* draw = reinterpret_cast<NMCUSTOMDRAW*>(lParam);
+            if (draw->hdr.hwndFrom == ListView_GetHeader(list) && draw->hdr.code == NM_CUSTOMDRAW) {
+                if (draw->dwDrawStage == CDDS_PREPAINT) {
+                    return CDRF_NOTIFYITEMDRAW;
+                }
+                if (draw->dwDrawStage == CDDS_ITEMPREPAINT) {
+                    return draw->dwItemSpec == kAttachmentColumn ? CDRF_NOTIFYPOSTPAINT : CDRF_DODEFAULT;
+                }
+                if (draw->dwDrawStage == CDDS_ITEMPOSTPAINT) {
+                    DrawPaperclip(draw->hdc, draw->rc, GetSysColor(COLOR_BTNTEXT));
+                    return CDRF_DODEFAULT;
+                }
+            }
+        }
+        return CallWindowProcW(listProc_, list, message, wParam, lParam);
+    }
+
+    // a paperclip in the middle of a cell, drawn with lines so it has no background and scales with the DPI
+    static void DrawPaperclip(HDC dc, const RECT& cell, COLORREF color) {
+        // the clip in a 16 by 16 grid: inner leg, small bend, right leg, top bend, outer leg, bottom bend
+        std::vector<POINT> points;
+        double unit = Scale(16) / 16.0;
+        double cx = (cell.left + cell.right) / 2.0;
+        double cy = (cell.top + cell.bottom) / 2.0;
+        // tilted like the paperclip glyph of Windows
+        const double tilt = 0.3;
+        auto add = [&](double x, double y) {
+            double dx = (x - 8) * unit;
+            double dy = (y - 8) * unit;
+            points.push_back({static_cast<LONG>(cx + dx * cos(tilt) - dy * sin(tilt) + 0.5), static_cast<LONG>(cy + dx * sin(tilt) + dy * cos(tilt) + 0.5)});
+        };
+        auto arc = [&](double x, double y, double radius, double from, double to) {
+            for (int i = 0; i <= 8; i++) {
+                double angle = from + (to - from) * i / 8;
+                add(x + radius * cos(angle), y + radius * sin(angle));
+            }
+        };
+        const double pi = 3.14159265358979;
+        add(8, 6);
+        arc(9.25, 10, 1.25, pi, 0);
+        arc(8, 3.5, 2.5, 0, -pi);
+        arc(7.5, 12.5, 2, pi, 0);
+        LOGBRUSH brush = {BS_SOLID, color, 0};
+        HPEN pen = ExtCreatePen(PS_GEOMETRIC | PS_SOLID | PS_ENDCAP_ROUND | PS_JOIN_ROUND, std::max(1, static_cast<int>(unit * 1.2 + 0.5)), &brush, 0, nullptr);
+        HGDIOBJ old = SelectObject(dc, pen);
+        Polyline(dc, points.data(), static_cast<int>(points.size()));
+        SelectObject(dc, old);
+        DeleteObject(pen);
+    }
+
     // "name (size)", and "embedded" for an image that the HTML shows
     static std::wstring AttachmentText(const json& attachment) {
         return JsonText(attachment, "filename") + L" (" + FormatSize(attachment.value("size", 0.0)) +
@@ -1054,6 +1109,7 @@ private:
     bool rebuilding_ = false;
     bool selectingFolder_ = false;
     int sortColumn_ = kReceivedColumn;
+    static inline WNDPROC listProc_ = nullptr;
     bool sortAscending_ = false;
 };
 

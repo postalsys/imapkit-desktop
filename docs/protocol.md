@@ -46,7 +46,7 @@ The sidecar starts the servers with the saved settings right away, `--no-autosta
 
 The settings are `{ host, imapPort, imapsPort, smtpPort, users: [{ username, password }], plugins: [names], quirks: [names], script: [rules], rest: { enabled, port, host, token } }`. `imapsPort` or `smtpPort` 0 turns that listener off. `quirks` are imapkit quirk presets, `script` imapkit script rules in their JSON form, and `rest` the imapkit REST API, which listens on 127.0.0.1 unless `rest.host` says otherwise (imapkit then requires a token).
 
-`previewHtml` and `sourceHtml` are complete documents with a Content-Security-Policy that allows only embedded (`data:`) images and styles, so the GUI can show them in a web view without network access.
+In `previewHtml` the reply history and forwarded content that `@postalsys/email-content` finds at the end of a message is folded into a `<details>` element, which opens without scripts. Only history that nothing written by the sender follows is folded, otherwise the message is shown whole. `previewHtml` and `sourceHtml` are complete documents with a Content-Security-Policy that allows only embedded (`data:`) images and styles, so the GUI can show them in a web view without network access.
 
 ## Events
 

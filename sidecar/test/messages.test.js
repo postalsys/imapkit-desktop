@@ -3,7 +3,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import MailComposer from 'nodemailer/lib/mail-composer/index.js';
-import { previewDocument, parseMessage, safeFilename, summarize } from '../src/messages.js';
+import { previewDocument, parseMessage, safeFilename, summarize, findHistory } from '../src/messages.js';
 
 describe('previewDocument', () => {
     // markup that could fool a search for the <head> of the message
@@ -79,5 +79,39 @@ describe('attachments', () => {
         assert.strictEqual(safeFilename('a:b*c?.txt', 0), 'a_b_c_.txt');
         assert.strictEqual(safeFilename('..', 2), 'attachment-3');
         assert.strictEqual(safeFilename(undefined, 0), 'attachment-1');
+    });
+});
+
+describe('reply history', () => {
+    it('folds the quote of a Gmail reply, in its original markup', async () => {
+        const html =
+            '<div dir="ltr">See you Monday.</div><div class="gmail_quote"><div class="gmail_attr">On Thu, Oct 22, 2026 Bob &lt;bob@example.com&gt; wrote:<br></div>' +
+            '<blockquote class="gmail_quote" style="border-left:1px solid #ccc">Can we meet?</blockquote></div>';
+        const fold = await findHistory({ html, subject: 'Re: Meeting' });
+        assert.strictEqual(fold.visible, '<div dir="ltr">See you Monday.</div>');
+        assert.match(fold.hidden, /^<div class="gmail_quote">.*<blockquote class="gmail_quote" style="border-left:1px solid #ccc">/);
+        assert.strictEqual(fold.label, 'Show quoted text');
+
+        const document = previewDocument({ html }, false, fold);
+        assert.ok(document.indexOf('Content-Security-Policy') < document.indexOf('See you Monday'), 'the policy still comes first');
+        assert.match(
+            document,
+            /See you Monday\.<\/div><details class="imapkit-desktop-history"><summary>&#183;&#183;&#183; Show quoted text<\/summary><div class="gmail_quote">/
+        );
+    });
+
+    it('folds a forwarded message and plain text history', async () => {
+        const forward = await findHistory({
+            text: 'FYI\n\n---------- Forwarded message ---------\nFrom: Carol <c@example.com>\nDate: Mon\nSubject: Plan\nTo: me\n\nThe plan.\n'
+        });
+        assert.deepStrictEqual([forward.visible, forward.label], ['FYI\n\n', 'Show forwarded message']);
+        const reply = await findHistory({ text: 'Thanks!\n\n-----Original Message-----\nFrom: Bob\nSent: Monday\nSubject: x\n\nOld text\n' });
+        assert.strictEqual(reply.visible, 'Thanks!\n\n');
+        assert.match(previewDocument({ text: 'x' }, false, reply), /<pre[^>]*>Thanks!\n\n<\/pre><details/);
+    });
+
+    it('leaves messages without history alone', async () => {
+        assert.strictEqual(await findHistory({ text: 'Just a message.\nNothing quoted.\n' }), null);
+        assert.strictEqual(await findHistory({ html: '<p>Hello</p>' }), null);
     });
 });
