@@ -909,7 +909,9 @@ private:
         // the centerline in a 512 by 512 box, in coordinates along the clip (u, toward the top right) and across it
         // (v): u = x - y, v = x + y. Four legs at v = 315, 425, 580 and 695
         std::vector<Gdiplus::PointF> points;
-        const double scale = Scale(16) / 512.0;
+        // a few pixels smaller than the cell, rows are only about as high as the text
+        const double size = std::min({cell.right - cell.left, cell.bottom - cell.top, static_cast<LONG>(Scale(16))}) - Scale(5);
+        const double scale = std::max(size, static_cast<double>(Scale(8))) / 512.0;
         const double cx = (cell.left + cell.right) / 2.0;
         const double cy = (cell.top + cell.bottom) / 2.0;
         auto add = [&](double u, double v) {
