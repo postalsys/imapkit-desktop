@@ -158,8 +158,8 @@ void OnCreate(HWND hwnd) {
     ShowPage(0);
 }
 
-// asks the sidecar for the latest release; a newer one is offered with its download page, the installer of a newer
-// version updates this one in place
+// asks the sidecar for the latest release; the installer of a newer one is offered for download, it updates this
+// version in place
 void CheckForUpdates(HWND hwnd) {
     SetStatus(STATUS_INFO, L"Checking for updates...");
     TheSidecar().Call("checkUpdate", json::object(), [hwnd](const json& result, const std::string& error) {
@@ -174,9 +174,9 @@ void CheckForUpdates(HWND hwnd) {
             return;
         }
         std::wstring text = L"ImapKit Desktop " + JsonText(result, "latest") + L" is available, you have " + current +
-                            L".\n\nOpen the download page? Run the new installer to update, your mailboxes and settings are kept.";
+                            L".\n\nDownload the installer now? Run it to update, your mailboxes and settings are kept.";
         if (MessageBoxW(hwnd, text.c_str(), kTitle, MB_ICONINFORMATION | MB_YESNO) == IDYES) {
-            ShellExecuteW(nullptr, L"open", JsonText(result, "url").c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            ShellExecuteW(nullptr, L"open", JsonText(result, "download").c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         }
     });
 }

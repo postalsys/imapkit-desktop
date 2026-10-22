@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the signed installer dist/ImapKitDesktop-Setup-<version>.exe, from the Mac:
+# Builds the signed installer dist/ImapKitDesktop-Setup.exe, from the Mac:
 #
 #   1. builds the app and stages it (exe, sidecar, pinned node.exe) on the Windows build machine
 #   2. copies the staging folder here
@@ -31,7 +31,8 @@ SIGN_FLAG=()
 if [ -n "${SIGN_WIN_ACCOUNT:-}" ] && [ -n "${SIGN_WIN_PROFILE:-}" ]; then
     SIGN_FLAG=(-DSIGN)
 fi
-OUTFILE="dist/ImapKitDesktop-Setup-${VERSION}.exe"
+# no version in the name, so releases/latest/download/ImapKitDesktop-Setup.exe always gets the latest release
+OUTFILE="dist/ImapKitDesktop-Setup.exe"
 makensis -V2 -NOCD -DVERSION="$VERSION" -DSTAGING=dist/ImapKitDesktop -DOUTFILE="$OUTFILE" "${SIGN_FLAG[@]}" installer/imapkit-desktop.nsi
 
 shasum -a 256 "$OUTFILE"

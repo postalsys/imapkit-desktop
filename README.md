@@ -21,7 +21,7 @@ A macOS GUI can reuse the sidecar and its protocol as it is.
 
 ## Installing
 
-Run `ImapKitDesktop-Setup-<version>.exe`. It installs for the current user, no administrator rights needed, to `%LOCALAPPDATA%\Programs\ImapKit Desktop`, with a Start menu shortcut and an entry in Installed apps. The setup, the app and the uninstaller are signed by Postal Systems OÜ.
+Run `ImapKitDesktop-Setup.exe` from the [latest release](https://github.com/postalsys/imapkit-desktop/releases/latest/download/ImapKitDesktop-Setup.exe). It installs for the current user, no administrator rights needed, to `%LOCALAPPDATA%\Programs\ImapKit Desktop`, with a Start menu shortcut and an entry in Installed apps. The setup, the app and the uninstaller are signed by Postal Systems OÜ.
 
 Running the setup of a newer version updates the installed one in place: a running copy is closed first (it saves its mailboxes), and the mailboxes and settings in `%APPDATA%\ImapKitDesktop` are kept. An older version asks before it replaces a newer one. `/S` installs silently; uninstalling asks whether to remove the mailboxes too (a silent uninstall keeps them).
 
@@ -34,7 +34,7 @@ scripts\win-build.cmd      :: npm install for the sidecar, then CMake + Ninja, g
 scripts\win-package.cmd    :: dist\ImapKitDesktop with the exe, the sidecar and a pinned, checksum-verified node.exe
 ```
 
-The installer is built from the Mac with `scripts/build-installer.sh`: it builds and stages the app on the Windows build machine (`WIN_HOST` and `WIN_DIR`, see `scripts/win-env.sh`), copies the staging folder back, signs the exe with Azure Artifact Signing (`scripts/sign-win.sh`, the same setup as EmailEngine releases, enabled by `SIGN_WIN_ACCOUNT` and `SIGN_WIN_PROFILE`), and builds `dist/ImapKitDesktop-Setup-<version>.exe` with NSIS (`brew install makensis`), signing the uninstaller and the setup on the way. The version comes from `package.json`; `sidecar/package.json` has to match it.
+The installer is built from the Mac with `scripts/build-installer.sh`: it builds and stages the app on the Windows build machine (`WIN_HOST` and `WIN_DIR`, see `scripts/win-env.sh`), copies the staging folder back, signs the exe with Azure Artifact Signing (`scripts/sign-win.sh`, the same setup as EmailEngine releases, enabled by `SIGN_WIN_ACCOUNT` and `SIGN_WIN_PROFILE`), and builds `dist/ImapKitDesktop-Setup.exe` with NSIS (`brew install makensis`), signing the uninstaller and the setup on the way. The version comes from `package.json`; `sidecar/package.json` has to match it.
 
 `scripts/win-run.sh` starts a development build on the desktop of the build machine and `scripts/win-screenshot.sh out.png` takes a screenshot of it (`PAGE=0|1|2` picks the page).
 
@@ -44,7 +44,7 @@ CI builds the app, a portable zip and an unsigned installer on every push to mas
 
 Releases follow EmailEngine's flow. Commits use Conventional Commit messages (`feat:`, `fix:` ...), and release-please keeps a release PR up to date on master (`release-please-config.json`, `.github/workflows/release.yaml`). Merging the PR bumps the version in `package.json` and `sidecar/package.json`, writes the changelog, pushes the `v<version>` tag and drafts the release.
 
-Then, on the release Mac, check out the tag and run `scripts/release.sh`. It checks that CI passed for the tag, builds the installer on the Windows build machine, signs the exe, the uninstaller and the setup with Azure Artifact Signing, writes `hashes.txt` signed with the release GPG key, uploads them to the draft and publishes it. The setup is uploaded twice, also as `ImapKitDesktop-Setup.exe`, so https://github.com/postalsys/imapkit-desktop/releases/latest/download/ImapKitDesktop-Setup.exe always gets the latest release. `BUILD_ONLY=yes` builds and signs without uploading.
+Then, on the release Mac, check out the tag and run `scripts/release.sh`. It checks that CI passed for the tag, builds the installer on the Windows build machine, signs the exe, the uninstaller and the setup with Azure Artifact Signing, writes `hashes.txt` signed with the release GPG key, uploads both to the draft and publishes it. The setup has no version in its name, so https://github.com/postalsys/imapkit-desktop/releases/latest/download/ImapKitDesktop-Setup.exe always gets the latest release. `BUILD_ONLY=yes` builds and signs without uploading.
 
 Help > Check for Updates in the app looks up the latest published release, and the installer of a newer version updates an installed one in place.
 

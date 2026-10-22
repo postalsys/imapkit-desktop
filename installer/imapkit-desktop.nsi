@@ -1,6 +1,6 @@
 ; The installer of ImapKit Desktop, built with NSIS 3.08 or newer (makensis runs on Windows, macOS and Linux):
 ;
-;   makensis -NOCD -DVERSION=0.1.0 -DSTAGING=dist/ImapKitDesktop -DOUTFILE=dist/ImapKitDesktop-Setup-0.1.0.exe \
+;   makensis -NOCD -DVERSION=0.1.0 -DSTAGING=dist/ImapKitDesktop -DOUTFILE=dist/ImapKitDesktop-Setup.exe \
 ;            [-DSIGN] installer/imapkit-desktop.nsi
 ;
 ; Run it from the root of the repository, -NOCD keeps the relative paths there. STAGING holds what gets installed:
@@ -27,7 +27,7 @@ SetCompressor /SOLID lzma
     !error "STAGING is not defined, pass -DSTAGING=<folder with the files to install>"
 !endif
 !ifndef OUTFILE
-    !define OUTFILE "ImapKitDesktop-Setup-${VERSION}.exe"
+    !define OUTFILE "ImapKitDesktop-Setup.exe"
 !endif
 
 !define PRODUCT "ImapKit Desktop"

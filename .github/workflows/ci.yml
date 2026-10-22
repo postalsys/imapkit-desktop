@@ -59,12 +59,12 @@ jobs:
                       choco install nsis -y --no-progress
                   }
                   $version = node -p "require('./package.json').version"
-                  & $makensis -V2 -NOCD "-DVERSION=$version" -DSTAGING=dist\ImapKitDesktop "-DOUTFILE=dist\ImapKitDesktop-Setup-$version.exe" installer/imapkit-desktop.nsi
+                  & $makensis -V2 -NOCD "-DVERSION=$version" -DSTAGING=dist\ImapKitDesktop -DOUTFILE=dist\ImapKitDesktop-Setup.exe installer/imapkit-desktop.nsi
                   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             - uses: actions/upload-artifact@v7
               with:
                   name: ImapKitDesktop-win-x64
                   path: |
                       dist/ImapKitDesktop-win-x64.zip
-                      dist/ImapKitDesktop-Setup-*.exe
+                      dist/ImapKitDesktop-Setup.exe
                   if-no-files-found: error

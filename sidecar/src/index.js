@@ -19,6 +19,7 @@ import imapkit, { quirks, validateStorage } from 'imapkit';
 import { MailServer } from './mail-server.js';
 import { Outbox, OUTBOX } from './outbox.js';
 import { RawClient, clientPresets } from './raw-client.js';
+import { releaseUpdate } from './update.js';
 import addressparser from 'nodemailer/lib/addressparser/index.js';
 import { summarize, parseMessage, sourceDocument, readAttachment, readAttachments, composeMessage } from './messages.js';
 import { DEFAULT_CONFIG, defaultStorage } from './defaults.js';
@@ -389,14 +390,12 @@ const methods = {
             signal: AbortSignal.timeout(15000)
         });
         if (res.status === 404) {
-            return { current: VERSION, latest: null, newer: false, url: null };
+            return releaseUpdate(null, VERSION);
         }
         if (!res.ok) {
             throw new Error('GitHub answered ' + res.status);
         }
-        const release = await res.json();
-        const latest = String(release.tag_name || '').replace(/^v/, '');
-        return { current: VERSION, latest, newer: compareVersions(latest, VERSION) > 0, url: release.html_url };
+        return releaseUpdate(await res.json(), VERSION);
     },
 
     clientPresets: () => clientPresets(server.config),
@@ -407,22 +406,6 @@ const methods = {
 
     clientDisconnect: () => rawClient.disconnect()
 };
-
-/**
- * Compares two x.y.z versions
- *
- * @return {Number} positive when a is newer, negative when b is newer, 0 when equal
- */
-function compareVersions(a, b) {
-    const parts = version => version.split('.').map(part => parseInt(part, 10) || 0);
-    const [x, y] = [parts(a), parts(b)];
-    for (let i = 0; i < 3; i++) {
-        if ((x[i] || 0) !== (y[i] || 0)) {
-            return (x[i] || 0) - (y[i] || 0);
-        }
-    }
-    return 0;
-}
 
 /**
  * Writes a change made in the GUI to the protocol log, as the line of a session named "app", so the log shows what
