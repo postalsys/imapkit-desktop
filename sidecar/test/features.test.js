@@ -56,6 +56,20 @@ describe('sidecar features', () => {
         fs.rmSync(dataDir, { recursive: true, force: true });
     });
 
+    it('writes the changes made in the GUI to the protocol log', async () => {
+        const { uid } = await sidecar.call('addMessage', { path: 'INBOX', raw: 'Subject: logged\r\n\r\nx\r\n' });
+        await sidecar.call('setFlags', { path: 'INBOX', uids: [uid], flags: ['\\Seen'], mode: 'add' });
+        await sidecar.call('createMailbox', { name: 'Logged' });
+        await sidecar.call('deleteMailbox', { path: 'Logged' });
+        const lines = [];
+        for (const pattern of [/^Added UID \d+ to INBOX/, /^Marked UID \d+ in INBOX as read/, /^Created the folder Logged/, /^Deleted the folder Logged/]) {
+            const event = await sidecar.waitFor(message => message.event === 'trace' && message.data.id === 'app' && pattern.test(message.data.text));
+            assert.strictEqual(event.data.direction, 'ui');
+            lines.push(event.data.text.trim());
+        }
+        assert.strictEqual(lines.length, 4);
+    });
+
     it('lists the quirk presets of imapkit', async () => {
         const hello = await sidecar.call('hello');
         assert.ok(hello.quirks.some(quirk => quirk.name === 'm365-throttle' && quirk.description));

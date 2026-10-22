@@ -45,13 +45,20 @@ struct SessionRow {
     bool closed = false;
 };
 
+// who a line of the log comes from: the server, the client, or a change made in this app (session "app")
+enum class Source { Server, Client, App };
+
 struct LogLine {
     // seconds since local midnight
     int time;
     std::wstring session;
-    bool fromClient;
+    Source source;
     std::wstring text;
 };
+
+const wchar_t* SourceLabel(Source source) {
+    return source == Source::Client ? L"C:" : source == Source::App ? L"UI:" : L"S:";
+}
 
 // local seconds since midnight of an ISO time
 int LocalSeconds(const std::string& iso) {
@@ -113,7 +120,7 @@ protected:
         log_ = AddControl(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS, IDC_LOG, WS_EX_CLIENTEDGE);
         ListView_SetExtendedListViewStyle(log_, LVS_EX_FULLROWSELECT);
         SendMessageW(log_, WM_SETFONT, reinterpret_cast<WPARAM>(MonoFont()), TRUE);
-        AddColumns(log_, {{L"Time", 70}, {L"Session", 70}, {L"", 30}, {L"Data", 900}});
+        AddColumns(log_, {{L"Time", 70}, {L"Session", 70}, {L"", 36}, {L"Data", 900}});
         UpdateEmptyText(json::object());
         UpdateButtons();
 
@@ -228,9 +235,14 @@ protected:
                     }
                     if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
                         size_t index = draw->nmcd.dwItemSpec;
-                        if (index < visible_.size() && lines_[visible_[index]].fromClient) {
-                            // client commands in blue, like the C: lines of a protocol log
-                            draw->clrText = RGB(0, 0, 160);
+                        if (index < visible_.size()) {
+                            // client commands in blue, like the C: lines of a protocol log, and changes made here in green
+                            Source source = lines_[visible_[index]].source;
+                            if (source == Source::Client) {
+                                draw->clrText = RGB(0, 0, 160);
+                            } else if (source == Source::App) {
+                                draw->clrText = RGB(0, 110, 0);
+                            }
                         }
                     }
                     return CDRF_DODEFAULT;
@@ -397,7 +409,7 @@ private:
         for (int row : rows) {
             const LogLine& line = lines_[visible_[row]];
             if (withPrefix) {
-                text += TimeText(line.time) + L"  " + line.session + (line.fromClient ? L"  C: " : L"  S: ");
+                text += TimeText(line.time) + L"  " + line.session + L"  " + SourceLabel(line.source) + L" ";
             }
             text += line.text + L"\r\n";
         }
@@ -485,7 +497,8 @@ private:
 
     void OnTrace(const json& data) {
         std::wstring session = JsonText(data, "id");
-        bool fromClient = JsonString(data, "direction") == "in";
+        std::string direction = JsonString(data, "direction");
+        Source source = direction == "in" ? Source::Client : direction == "ui" ? Source::App : Source::Server;
         int time = LocalSeconds(JsonString(data, "time"));
         std::wstring text = JsonText(data, "text");
 
@@ -499,7 +512,7 @@ private:
             if (end > start && text[end - 1] == L'\r') {
                 end--;
             }
-            lines_.push_back({time, session, fromClient, text.substr(start, end - start)});
+            lines_.push_back({time, session, source, text.substr(start, end - start)});
             if (Matches(lines_.back())) {
                 visible_.push_back(lines_.size() - 1);
             }
@@ -565,7 +578,7 @@ private:
                 wcsncpy_s(item.pszText, item.cchTextMax, line.session.c_str(), _TRUNCATE);
                 break;
             case 2:
-                wcsncpy_s(item.pszText, item.cchTextMax, line.fromClient ? L"C:" : L"S:", _TRUNCATE);
+                wcsncpy_s(item.pszText, item.cchTextMax, SourceLabel(line.source), _TRUNCATE);
                 break;
             default:
                 wcsncpy_s(item.pszText, item.cchTextMax, line.text.c_str(), _TRUNCATE);

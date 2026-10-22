@@ -265,8 +265,8 @@ const methods = {
     message: async params => {
         if (params.path === OUTBOX) {
             // with the SMTP envelope: the recipients of a Bcc are only there
-            if (params.markSeen) {
-                outbox.setFlags([params.uid], ['\\Seen'], 'add');
+            if (params.markSeen && outbox.setFlags([params.uid], ['\\Seen'], 'add').length) {
+                logAction('Opened message ' + params.uid + ' of the Outbox, marked as read');
             }
             const message = outbox.get(params.uid);
             return Object.assign(await parseMessage(message, !!params.remoteImages), { envelope: message.envelope, user: message.user });
@@ -275,6 +275,7 @@ const methods = {
         if (params.markSeen && !message.flags.includes('\\Seen')) {
             server.control.setFlags(params.path, [params.uid], ['\\Seen'], 'add');
             message.flags = message.flags.concat('\\Seen');
+            logAction('Opened UID ' + params.uid + ' in ' + params.path + ', marked as read');
         }
         return parseMessage(message, !!params.remoteImages);
     },
@@ -375,6 +376,60 @@ const methods = {
     reset: () => replaceStorage(defaultStorage())
 };
 
+/**
+ * Writes a change made in the GUI to the protocol log, as the line of a session named "app", so the log shows what
+ * changed the mailboxes between the commands of the clients
+ *
+ * @param {String} text What was done
+ */
+function logAction(text) {
+    send({ event: 'trace', data: { id: 'app', direction: 'ui', text: text + '\r\n', time: new Date().toISOString() } });
+}
+
+const where = mailbox => (mailbox === OUTBOX ? 'the Outbox' : mailbox);
+// "UID 5", "UIDs 5, 6" or "12 messages"
+const which = (mailbox, uids) => {
+    const label = mailbox === OUTBOX ? 'message' : 'UID';
+    if (uids.length > 5) {
+        return uids.length + ' messages';
+    }
+    return label + (uids.length === 1 ? ' ' : 's ') + uids.join(', ');
+};
+const FLAG_NAMES = { '\\Seen': ['read', 'unread'], '\\Flagged': ['flagged', 'not flagged'] };
+
+// the log line of a change made with a method, from its parameters and result, null for nothing to log
+const ACTIONS = {
+    start: () => 'Started the server',
+    stop: () => 'Stopped the server',
+    disconnect: params => 'Disconnected ' + params.id,
+    inject: params => 'Sent to ' + params.id + ': ' + String(params.data).trim(),
+    createMailbox: (params, result) => 'Created the folder ' + ((result && result.path) || params.path || childPath(params.parent, params.name)),
+    renameMailbox: (params, result) => 'Renamed the folder ' + params.path + ' to ' + result.path,
+    deleteMailbox: params => 'Deleted the folder ' + params.path,
+    setFlags: (params, result) => {
+        const changed = (Array.isArray(result) ? result : []).map(message => message.uid);
+        if (!changed.length) {
+            return null;
+        }
+        const names = params.flags.length === 1 && FLAG_NAMES[params.flags[0]];
+        if (names && (params.mode === 'add' || params.mode === 'remove')) {
+            return 'Marked ' + which(params.path, changed) + ' in ' + where(params.path) + ' as ' + names[params.mode === 'add' ? 0 : 1];
+        }
+        return 'Set the flags of ' + which(params.path, changed) + ' in ' + where(params.path) + ' (' + params.mode + ' ' + params.flags.join(' ') + ')';
+    },
+    moveMessages: params =>
+        (params.path === OUTBOX ? 'Delivered ' : 'Moved ') + which(params.path, params.uids) + ' from ' + where(params.path) + ' to ' + params.target,
+    deleteMessages: (params, result) =>
+        result && result.uidvalidity
+            ? 'Moved ' + which(params.path, params.uids) + ' from ' + where(params.path) + ' to the Trash'
+            : 'Deleted ' + which(params.path, params.uids) + ' from ' + where(params.path),
+    addMessage: (params, result) => 'Added UID ' + result.uid + ' to ' + params.path,
+    importMessages: (params, result) => 'Imported ' + result.length + ' message' + (result.length === 1 ? '' : 's') + ' into ' + where(params.path),
+    composeMessage: params => 'Wrote a new message into ' + where(params.path),
+    importStorage: () => 'Replaced the mailboxes with an imported file',
+    reset: () => 'Reset the mailboxes to the defaults'
+};
+
 async function handle(line) {
     let request;
     try {
@@ -387,7 +442,15 @@ async function handle(line) {
         if (!method) {
             throw new Error('Unknown method ' + request.method);
         }
-        send({ id: request.id, result: (await method(request.params || {})) ?? null });
+        const params = request.params || {};
+        const count = request.method === 'emptyOutbox' ? outbox.messages.length : 0;
+        const result = (await method(params)) ?? null;
+        const describe = Object.hasOwn(ACTIONS, request.method) ? ACTIONS[request.method] : null;
+        const text = request.method === 'emptyOutbox' ? (count ? 'Emptied the Outbox (' + count + ' messages)' : null) : describe && describe(params, result);
+        if (text) {
+            logAction(text);
+        }
+        send({ id: request.id, result });
     } catch (err) {
         send({ id: request.id, error: { message: err.message, code: err.code || null } });
     }
