@@ -1,0 +1,26 @@
+{
+    "name": "imapkit-desktop-sidecar",
+    "version": "0.1.0",
+    "private": true,
+    "description": "Runs ImapKit for the native ImapKit Desktop GUI, controlled with JSON lines over stdio",
+    "type": "module",
+    "main": "src/index.js",
+    "scripts": {
+        "start": "node src/index.js",
+        "test": "node --test"
+    },
+    "engines": {
+        "node": ">=20.0.0"
+    },
+    "license": "MIT",
+    "dependencies": {
+        "imapkit": "5.2.0",
+        "libmime": "5.6.1",
+        "mailparser": "3.12.2",
+        "nodemailer": "10.2.0",
+        "smtp-server": "3.21.0"
+    },
+    "devDependencies": {
+        "imapflow": "2.9.0"
+    }
+}

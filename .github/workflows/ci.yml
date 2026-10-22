@@ -1,0 +1,70 @@
+name: CI
+
+on:
+    push:
+        branches:
+            - master
+    pull_request:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+jobs:
+    sidecar:
+        name: Sidecar tests (Node ${{ matrix.node }}, ${{ matrix.os }})
+        strategy:
+            fail-fast: false
+            matrix:
+                os: [ubuntu-24.04, windows-latest]
+                node: [20, 22, 24]
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 15
+        defaults:
+            run:
+                working-directory: sidecar
+        steps:
+            - uses: actions/checkout@v6
+            - uses: actions/setup-node@v6
+              with:
+                  node-version: ${{ matrix.node }}
+                  cache: npm
+                  cache-dependency-path: sidecar/package-lock.json
+            - run: npm ci
+            - run: npm test
+
+    windows:
+        name: Build and package for Windows
+        runs-on: windows-latest
+        timeout-minutes: 30
+        steps:
+            - uses: actions/checkout@v6
+            - uses: actions/setup-node@v6
+              with:
+                  node-version: 24
+                  cache: npm
+                  cache-dependency-path: sidecar/package-lock.json
+            - name: Build and package
+              shell: cmd
+              run: scripts\win-package.cmd
+            # unsigned, the release installer is built and signed with scripts/build-installer.sh
+            - name: Build the installer
+              shell: pwsh
+              run: |
+                  $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+                  if (-not (Test-Path $makensis)) {
+                      choco install nsis -y --no-progress
+                  }
+                  $version = node -p "require('./package.json').version"
+                  & $makensis -V2 -NOCD "-DVERSION=$version" -DSTAGING=dist/ImapKitDesktop "-DOUTFILE=dist/ImapKitDesktop-Setup-$version.exe" installer/imapkit-desktop.nsi
+                  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            - uses: actions/upload-artifact@v7
+              with:
+                  name: ImapKitDesktop-win-x64
+                  path: |
+                      dist/ImapKitDesktop-win-x64.zip
+                      dist/ImapKitDesktop-Setup-*.exe
+                  if-no-files-found: error
