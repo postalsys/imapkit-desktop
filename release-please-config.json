@@ -22,7 +22,9 @@
                     "path": "sidecar/package-lock.json",
                     "jsonpath": "$.packages[''].version"
                 }
-            ]
+            ],
+            "initial-version": "0.1.0",
+            "bump-minor-pre-major": true
         }
     },
     "bootstrap-sha": "c7468917ebd327227400712bc20d804f7b1c4895"
