@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/postalsys/imapkit-desktop/compare/v0.1.0...v0.2.0) (2026-10-22)
+
+
+### Features
+
+* Client page, a plaintext client like telnet or openssl s_client with TLS and STARTTLS ([7a0a1f9](https://github.com/postalsys/imapkit-desktop/commit/7a0a1f9fc6228bfde4663d5b8617f379c947065d))
+
 ## 0.1.0 (2026-10-22)
 
 
