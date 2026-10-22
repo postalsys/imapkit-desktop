@@ -206,6 +206,23 @@ describe('sidecar features', () => {
         socket.end();
     });
 
+    it('answers ID with the custom values that are set, NIL without', async () => {
+        const values = { name: 'Dovecot', version: '2.3.21', vendor: '  ', os: '' };
+        await sidecar.call('start', { config: Object.assign({}, config, { id: { enabled: true, values } }) });
+        let { socket, read } = await connectImap(config.imapPort);
+        socket.write('A1 ID NIL\r\n');
+        assert.match(await read(/^A1 /m), /^\* ID \("name" "Dovecot" "version" "2\.3\.21"\)\r$/m);
+        socket.end();
+
+        // turned off, the values stay in the settings but the answer is NIL
+        await sidecar.call('start', { config: Object.assign({}, config, { id: { enabled: false, values } }) });
+        ({ socket, read } = await connectImap(config.imapPort));
+        socket.write('A1 ID NIL\r\n');
+        assert.match(await read(/^A1 /m), /^\* ID NIL\r$/m);
+        socket.end();
+        assert.deepStrictEqual((await sidecar.call('getConfig')).id, { enabled: false, values });
+    });
+
     it('starts the REST API when enabled', async () => {
         const restPort = await freePort();
         const status = await sidecar.call('start', { config: Object.assign({}, config, { rest: { enabled: true, port: restPort } }) });

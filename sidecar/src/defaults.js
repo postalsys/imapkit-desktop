@@ -29,6 +29,8 @@ export const DEFAULT_CONFIG = {
     quirks: [],
     // script rules of imapkit in their JSON form
     script: [],
+    // the ID response (RFC 2971): custom field values when enabled, ID NIL otherwise
+    id: { enabled: false, values: {} },
     rest: { enabled: false, port: 8143, host: '127.0.0.1', token: '' }
 };
 

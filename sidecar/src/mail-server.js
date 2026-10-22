@@ -43,6 +43,22 @@ function listen(server, port, host) {
     });
 }
 
+/**
+ * The ID response of the server (RFC 2971) from the settings: the fields that have a value, when custom values are
+ * turned on. Without any, imapkit answers ID NIL
+ *
+ * @param {Object} config The settings, `id: { enabled, values: { name, version, ... } }`
+ * @return {Object|undefined} the `id` option of imapkit
+ */
+export function serverId(config) {
+    const id = config.id || {};
+    if (!id.enabled) {
+        return undefined;
+    }
+    const fields = Object.entries(id.values || {}).filter(([key, value]) => key && typeof value === 'string' && value.trim());
+    return fields.length ? Object.fromEntries(fields.map(([key, value]) => [key, value.trim()])) : undefined;
+}
+
 export class MailServer extends EventEmitter {
     /**
      * @param {Object} config Settings, see DEFAULT_CONFIG
@@ -82,6 +98,7 @@ export class MailServer extends EventEmitter {
             plugins: config.plugins,
             quirks: config.quirks || [],
             script: config.script || [],
+            id: serverId(config),
             tls: config.imapsPort ? { port: config.imapsPort, host: config.host } : undefined,
             // the REST API controls everything, imapkit refuses a non-loopback address without a token
             rest: rest.enabled ? { port: rest.port, host: rest.host || '127.0.0.1', token: rest.token || undefined } : undefined

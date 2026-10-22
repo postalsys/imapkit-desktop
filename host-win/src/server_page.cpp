@@ -43,9 +43,16 @@ enum ControlId {
     IDC_REST_URL,
     IDC_REST_COPY,
     IDC_REST_DOCS,
+    IDC_ID_ENABLED,
+    // the edit of each field of kIdFields, in order
+    IDC_ID_FIELD = 260,
 };
 
-enum AdvancedTab { TAB_EXTENSIONS, TAB_QUIRKS, TAB_SCRIPTS, TAB_REST, TAB_COUNT };
+enum AdvancedTab { TAB_EXTENSIONS, TAB_ID, TAB_QUIRKS, TAB_SCRIPTS, TAB_REST, TAB_COUNT };
+
+// the fields of the ID response that RFC 2971 section 3.3 defines
+const char* kIdFields[] = {"name", "version", "os", "os-version", "vendor", "support-url", "address", "date", "command", "arguments", "environment"};
+constexpr int kIdFieldCount = static_cast<int>(std::size(kIdFields));
 
 const wchar_t* kJsonFilter = L"JSON files (*.json)\0*.json\0All files (*.*)\0*.*\0";
 const wchar_t* kHostItems[] = {L"127.0.0.1 (this computer only)", L"0.0.0.0 (all network interfaces)"};
@@ -123,7 +130,7 @@ protected:
         copySettings_ = AddControl(L"BUTTON", L"&Copy", WS_TABSTOP, IDC_COPY_SETTINGS);
 
         advanced_ = AddControl(WC_TABCONTROLW, L"", WS_TABSTOP | WS_CLIPSIBLINGS, IDC_ADVANCED);
-        const wchar_t* tabNames[] = {L"IMAP Extensions", L"Quirks", L"Fault Scripts", L"REST API"};
+        const wchar_t* tabNames[] = {L"IMAP Extensions", L"Server ID", L"Quirks", L"Fault Scripts", L"REST API"};
         for (int i = 0; i < TAB_COUNT; i++) {
             TCITEMW item = {};
             item.mask = TCIF_TEXT;
@@ -137,6 +144,18 @@ protected:
         extensions.push_back(pluginsList_ = AddCheckList(IDC_PLUGINS));
         extensions.push_back(pluginHelp_ = AddControl(L"STATIC", L"Select an extension to see what it does.", SS_LEFT, IDC_PLUGIN_HELP, WS_EX_STATICEDGE));
         extensions.push_back(pluginDefaults_ = AddControl(L"BUTTON", L"Restore &Defaults", WS_TABSTOP, IDC_PLUGIN_DEFAULTS));
+
+        auto& id = tabs_[TAB_ID];
+        id.push_back(idHint_ = AddControl(L"STATIC",
+                                          L"What the server answers to the ID command of a client (RFC 2971). Clients may change "
+                                          L"what they do for a server they know.",
+                                          SS_LEFT, 0));
+        id.push_back(idEnabled_ = AddControl(L"BUTTON", L"Answer ID with these &values (empty fields are left out), not with ID NIL",
+                                             WS_TABSTOP | BS_AUTOCHECKBOX, IDC_ID_ENABLED));
+        for (int i = 0; i < kIdFieldCount; i++) {
+            id.push_back(idLabels_[i] = AddControl(L"STATIC", (Widen(kIdFields[i]) + L":").c_str(), SS_LEFT, 0));
+            id.push_back(idEdits_[i] = AddControl(L"EDIT", L"", WS_TABSTOP | ES_AUTOHSCROLL, IDC_ID_FIELD + i, WS_EX_CLIENTEDGE));
+        }
 
         auto& quirks = tabs_[TAB_QUIRKS];
         quirks.push_back(quirksHint_ = AddControl(L"STATIC", L"Make the server behave like a known real server, to test how a client copes with it.",
@@ -242,7 +261,9 @@ protected:
 
     void OnCommand(int id, int code, HWND) override {
         // edits of the settings, they apply on the next start
-        if (code == EN_CHANGE && (id == IDC_IMAP_PORT || id == IDC_IMAPS_PORT || id == IDC_SMTP_PORT || id == IDC_REST_PORT || id == IDC_REST_TOKEN)) {
+        bool idField = id >= IDC_ID_FIELD && id < IDC_ID_FIELD + kIdFieldCount;
+        if (code == EN_CHANGE &&
+            (idField || id == IDC_IMAP_PORT || id == IDC_IMAPS_PORT || id == IDC_SMTP_PORT || id == IDC_REST_PORT || id == IDC_REST_TOKEN)) {
             SettingsChanged();
             return;
         }
@@ -268,6 +289,7 @@ protected:
             case IDC_IMAPS_ON:
             case IDC_SMTP_ON:
             case IDC_REST_ENABLED:
+            case IDC_ID_ENABLED:
                 UpdateEnabled();
                 SettingsChanged();
                 break;
@@ -389,6 +411,21 @@ private:
         MoveWindow(pluginHelp_, area.left, listBottom + pad, width, helpHeight, TRUE);
         MoveWindow(pluginDefaults_, area.right - button, area.bottom - Scale(25), button, Scale(25), TRUE);
         ListView_SetColumnWidth(pluginsList_, 0, width - Scale(24));
+
+        // server ID: hint, the switch, then the fields in two columns when there is room
+        MoveWindow(idHint_, area.left, area.top, width, hint, TRUE);
+        MoveWindow(idEnabled_, area.left, area.top + hint + pad, width, Scale(20), TRUE);
+        int columns = width >= Scale(520) ? 2 : 1;
+        int rows = (kIdFieldCount + columns - 1) / columns;
+        int columnWidth = (width - (columns - 1) * 3 * pad) / columns;
+        int idLabelWidth = Scale(80);
+        int fieldsTop = area.top + hint + pad + Scale(30);
+        for (int i = 0; i < kIdFieldCount; i++) {
+            int x = area.left + (i / rows) * (columnWidth + 3 * pad);
+            int y = fieldsTop + (i % rows) * Scale(27);
+            MoveWindow(idLabels_[i], x, y + Scale(3), idLabelWidth, Scale(16), TRUE);
+            MoveWindow(idEdits_[i], x + idLabelWidth, y, columnWidth - idLabelWidth, Scale(21), TRUE);
+        }
 
         // quirks: hint, list, description
         MoveWindow(quirksHint_, area.left, area.top, width, hint, TRUE);
@@ -561,6 +598,11 @@ private:
         for (HWND control : {restPortLabel_, restPort_, restTokenLabel_, restToken_}) {
             EnableWindow(control, rest);
         }
+        bool id = Button_GetCheck(idEnabled_) == BST_CHECKED;
+        for (int i = 0; i < kIdFieldCount; i++) {
+            EnableWindow(idLabels_[i], id);
+            EnableWindow(idEdits_[i], id);
+        }
     }
 
     // a port field of a listener that can be turned off: the port when on, 0 when off
@@ -595,6 +637,12 @@ private:
         FillUsers();
         script_ = config.value("script", json::array());
         ShowScript();
+        json id = config.value("id", json::object());
+        Button_SetCheck(idEnabled_, id.value("enabled", false) ? BST_CHECKED : BST_UNCHECKED);
+        idValues_ = id.value("values", json::object());
+        for (int i = 0; i < kIdFieldCount; i++) {
+            SetWindowTextW(idEdits_[i], JsonText(idValues_, kIdFields[i]).c_str());
+        }
         FillCheckList(pluginsList_, plugins_, NameSet(config.value("plugins", json::array())));
         FillCheckList(quirksList_, quirks_, NameSet(config.value("quirks", json::array())));
         UpdateEnabled();
@@ -627,7 +675,22 @@ private:
             {"plugins", CheckedNames(pluginsList_, plugins_)},
             {"quirks", CheckedNames(quirksList_, quirks_)},
             {"script", script_},
+            {"id", {{"enabled", Button_GetCheck(idEnabled_) == BST_CHECKED}, {"values", IdValues()}}},
         };
+    }
+
+    // the values of the ID fields, empty ones left out. Fields the form has no edit for (from config.json) are kept
+    json IdValues() {
+        json values = idValues_.is_object() ? idValues_ : json::object();
+        for (int i = 0; i < kIdFieldCount; i++) {
+            std::string value = Narrow(GetWindowString(idEdits_[i]));
+            if (value.empty()) {
+                values.erase(kIdFields[i]);
+            } else {
+                values[kIdFields[i]] = value;
+            }
+        }
+        return values;
     }
 
     // settings that differ from the ones the server runs with wait for Apply
@@ -735,6 +798,7 @@ private:
     HWND scriptsHint_ = nullptr, scriptRules_ = nullptr, scriptLoad_ = nullptr, scriptClear_ = nullptr, scriptDocs_ = nullptr;
     HWND restHint_ = nullptr, restEnabled_ = nullptr, restPortLabel_ = nullptr, restPort_ = nullptr, restTokenLabel_ = nullptr;
     HWND restToken_ = nullptr, restUrlLabel_ = nullptr, restUrl_ = nullptr, restCopy_ = nullptr, restDocs_ = nullptr;
+    HWND idHint_ = nullptr, idEnabled_ = nullptr, idLabels_[kIdFieldCount] = {}, idEdits_[kIdFieldCount] = {};
     std::vector<HWND> tabs_[TAB_COUNT];
 
     RECT banner_ = {};
@@ -746,6 +810,7 @@ private:
     json quirks_ = json::array();
     json defaults_ = json::object();
     json script_ = json::array();
+    json idValues_ = json::object();
     json status_ = json::object();
     // the settings the server runs with, edits that differ wait for Apply
     json applied_ = json::object();
