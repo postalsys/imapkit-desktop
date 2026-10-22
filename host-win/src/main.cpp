@@ -2,6 +2,7 @@
 #include "app.h"
 
 #include <objbase.h>
+#include <shellapi.h>
 
 #include <algorithm>
 
@@ -27,6 +28,7 @@ enum MenuId {
     IDM_IMPORT_MAILBOXES,
     IDM_EXPORT_MAILBOXES,
     IDM_RESET_MAILBOXES,
+    IDM_CHECK_UPDATES,
 };
 
 const wchar_t* kJsonFilter = L"JSON files (*.json)\0*.json\0All files (*.*)\0*.*\0";
@@ -87,6 +89,8 @@ HMENU BuildMenu() {
     AppendMenuW(view, MF_STRING, IDM_VIEW_CONNECTIONS, L"&Connections\tCtrl+2");
     AppendMenuW(view, MF_STRING, IDM_VIEW_MESSAGES, L"&Messages\tCtrl+3");
     HMENU help = CreatePopupMenu();
+    AppendMenuW(help, MF_STRING, IDM_CHECK_UPDATES, L"Check for &Updates...");
+    AppendMenuW(help, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(help, MF_STRING, IDM_ABOUT, L"&About ImapKit Desktop");
     HMENU bar = CreateMenu();
     AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(file), L"&File");
@@ -150,6 +154,29 @@ void OnCreate(HWND hwnd) {
     ShowPage(0);
 }
 
+// asks the sidecar for the latest release; a newer one is offered with its download page, the installer of a newer
+// version updates this one in place
+void CheckForUpdates(HWND hwnd) {
+    SetStatus(STATUS_INFO, L"Checking for updates...");
+    TheSidecar().Call("checkUpdate", json::object(), [hwnd](const json& result, const std::string& error) {
+        SetStatus(STATUS_INFO, L"");
+        if (!error.empty()) {
+            MessageBoxW(hwnd, (L"Could not check for updates: " + Widen(error)).c_str(), kTitle, MB_ICONWARNING);
+            return;
+        }
+        std::wstring current = JsonText(result, "current");
+        if (!result.value("newer", false)) {
+            MessageBoxW(hwnd, (L"ImapKit Desktop " + current + L" is the latest version.").c_str(), kTitle, MB_ICONINFORMATION);
+            return;
+        }
+        std::wstring text = L"ImapKit Desktop " + JsonText(result, "latest") + L" is available, you have " + current +
+                            L".\n\nOpen the download page? Run the new installer to update, your mailboxes and settings are kept.";
+        if (MessageBoxW(hwnd, text.c_str(), kTitle, MB_ICONINFORMATION | MB_YESNO) == IDYES) {
+            ShellExecuteW(nullptr, L"open", JsonText(result, "url").c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        }
+    });
+}
+
 LRESULT CALLBACK MainProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
         case WM_CREATE:
@@ -190,6 +217,9 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                     }
                     break;
                 }
+                case IDM_CHECK_UPDATES:
+                    CheckForUpdates(hwnd);
+                    break;
                 case IDM_RESET_MAILBOXES:
                     if (MessageBoxW(hwnd, L"Remove every message and folder and start over with the default mailboxes?", L"Reset Mailboxes",
                                     MB_ICONWARNING | MB_OKCANCEL) == IDOK) {

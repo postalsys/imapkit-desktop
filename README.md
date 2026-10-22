@@ -39,6 +39,14 @@ The installer is built from the Mac with `scripts/build-installer.sh`: it builds
 
 CI builds the app, a portable zip and an unsigned installer on every push to master, they are the `ImapKitDesktop-win-x64` artifact of the CI run.
 
+## Releasing
+
+Releases follow EmailEngine's flow. Commits use Conventional Commit messages (`feat:`, `fix:` ...), and release-please keeps a release PR up to date on master (`release-please-config.json`, `.github/workflows/release.yaml`). Merging the PR bumps the version in `package.json` and `sidecar/package.json`, writes the changelog, pushes the `v<version>` tag and drafts the release.
+
+Then, on the release Mac, check out the tag and run `scripts/release.sh`. It checks that CI passed for the tag, builds the installer on the Windows build machine, signs the exe, the uninstaller and the setup with Azure Artifact Signing, writes `hashes.txt` signed with the release GPG key, uploads both to the draft and publishes it. `BUILD_ONLY=yes` builds and signs without uploading.
+
+Help > Check for Updates in the app looks up the latest published release, and the installer of a newer version updates an installed one in place.
+
 ## Testing
 
 ```

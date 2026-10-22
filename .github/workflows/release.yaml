@@ -1,0 +1,24 @@
+on:
+    push:
+        branches:
+            - master
+
+permissions: {}
+
+name: Manage Release
+
+# release-please opens or updates the release PR on every push to master. Merging it drafts the release and pushes
+# its tag (force-tag-creation, GitHub withholds the tag of a draft otherwise). Nothing is published here: the signed
+# installer is built and uploaded from the release Mac with scripts/release.sh, which then publishes the draft, so
+# nobody sees a version whose installer does not exist yet.
+jobs:
+    release_please:
+        name: Create or prepare release
+        runs-on: ubuntu-latest
+        permissions:
+            # the release PR, the tag and the draft release
+            contents: write
+            pull-requests: write
+        steps:
+            # configured through release-please-config.json, only the config file can set `draft`
+            - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
