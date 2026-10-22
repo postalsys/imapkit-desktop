@@ -1,0 +1,75 @@
+{
+  "INBOX": {
+    "uidvalidity": 1,
+    "messages": [
+      {
+        "uid": 1,
+        "raw": "From: ImapKit Desktop <mock@imapkit.local>\r\nTo: Test User <testuser@imapkit.local>\r\nSubject: Welcome to ImapKit Desktop\r\nMessage-ID: <demo-1@imapkit.local>\r\nDate: Sun, 18 Oct 2026 05:00:00 +0000\r\nContent-Transfer-Encoding: quoted-printable\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>This mailbox lives in the memory of <b>ImapKit Desktop</b>.</p><p>Point =\r\nan IMAP client to the IMAP port, or send mail to the SMTP port, and watch =\r\nthe sessions in the Connections view.</p>\r\n",
+        "flags": [
+          "\\Seen"
+        ],
+        "internaldate": "18-Oct-2026 08:00:00 +0300"
+      },
+      {
+        "uid": 2,
+        "raw": "From: Northwind Store <orders@northwind.example>\r\nTo: Test User <testuser@imapkit.local>\r\nSubject: Your order #48213 has shipped\r\nMessage-ID: <demo-2@imapkit.local>\r\nDate: Mon, 19 Oct 2026 06:12:00 +0000\r\nContent-Transfer-Encoding: quoted-printable\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<div style=3D\"font-family:Segoe UI,Arial,sans-serif;max-width:560px\">\n<h2 style=3D\"color:#1f5c99;margin:0 0 12px\">Good news, your order is on its=\r\n way</h2>\n<p>Hi Test User,</p><p>Order <b>#48213</b> left our warehouse =\r\nthis morning and should arrive on <b>Friday</b>.</p>\n<table cellpadding=3D\"6\" style=3D\"border-collapse:collapse;width:100%;font-=\r\nsize:14px\">\n<tr style=3D\"background:#eef3f8\"><th align=3D\"left\">Item</th><t=\r\nh align=3D\"right\">Qty</th><th align=3D\"right\">Price</th></tr>\n<tr><td>Mechanical keyboard</td><td align=3D\"right\">1</td><td =\r\nalign=3D\"right\">$89.00</td></tr>\n<tr><td>USB-C cable, 2 m</td><td =\r\nalign=3D\"right\">2</td><td align=3D\"right\">$18.00</td></tr>\n<tr style=3D\"border-top:1px solid #ccc\"><td><b>Total</b></td><td></td><td =\r\nalign=3D\"right\"><b>$107.00</b></td></tr>\n</table>\n<p><a =\r\nhref=3D\"https://northwind.example/track/48213\">Track your parcel</a></p>\n<p style=3D\"color:#777;font-size:12px\">Northwind Store, 1 Example =\r\nStreet</p></div>\r\n",
+        "flags": [
+          "\\Seen"
+        ],
+        "internaldate": "19-Oct-2026 09:12:00 +0300"
+      },
+      {
+        "uid": 3,
+        "raw": "From: Billing <billing@acme-hosting.example>\r\nTo: Test User <testuser@imapkit.local>\r\nSubject: Invoice INV-2026-0142\r\nMessage-ID: <demo-3@imapkit.local>\r\nDate: Tue, 20 Oct 2026 11:40:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"--_NmP-adcf4fb7d78200e8-Part_1\"\r\n\r\n----_NmP-adcf4fb7d78200e8-Part_1\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 7bit\r\n\r\nHello,\n\nPlease find attached the invoice for October.\n\nAmount due: EUR 49.00\nDue date: 2026-11-05\n\nThank you,\nACME Hosting\r\n----_NmP-adcf4fb7d78200e8-Part_1\r\nContent-Type: application/pdf; name=INV-2026-0142.pdf\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename=INV-2026-0142.pdf\r\n\r\nJVBERi0xLjQKMSAwIG9iajw8L1R5cGUvQ2F0YWxvZy9QYWdlcyAyIDAgUj4+ZW5kb2JqIDIgMCBv\r\nYmo8PC9UeXBlL1BhZ2VzL0tpZHNbMyAwIFJdL0NvdW50IDE+PmVuZG9iaiAzIDAgb2JqPDwvVHlw\r\nZS9QYWdlL1BhcmVudCAyIDAgUi9NZWRpYUJveFswIDAgNjEyIDc5Ml0+PmVuZG9iagp0cmFpbGVy\r\nPDwvUm9vdCAxIDAgUj4+CiUlRU9GCg==\r\n----_NmP-adcf4fb7d78200e8-Part_1--\r\n",
+        "flags": [
+          "\\Seen"
+        ],
+        "internaldate": "20-Oct-2026 14:40:00 +0300"
+      },
+      {
+        "uid": 4,
+        "raw": "From: CI <ci@builds.example>\r\nTo: Test User <testuser@imapkit.local>\r\nSubject: Build failed: main #1287\r\nMessage-ID: <demo-4@imapkit.local>\r\nDate: Wed, 21 Oct 2026 05:03:00 +0000\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nBuild #1287 of main failed.\n\nStep: test\nFailing test: sync > resumes after IDLE timeout\n\nhttps://builds.example/main/1287\r\n",
+        "flags": [
+          "\\Seen"
+        ],
+        "internaldate": "21-Oct-2026 08:03:00 +0300"
+      },
+      {
+        "uid": 5,
+        "raw": "From: Mail Weekly <news@mailweekly.example>\r\nTo: Test User <testuser@imapkit.local>\r\nSubject: Mail Weekly: five IMAP extensions worth knowing\r\nMessage-ID: <demo-5@imapkit.local>\r\nDate: Wed, 21 Oct 2026 13:25:00 +0000\r\nContent-Transfer-Encoding: quoted-printable\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<div style=3D\"font-family:Georgia,serif;max-width:560px\">\n<img src=3D\"https://mailweekly.example/banner.png\" width=3D\"560\" =\r\nheight=3D\"120\" alt=3D\"Mail Weekly\">\n<h2>Five IMAP extensions worth =\r\nknowing</h2>\n<ol><li><b>IDLE</b> for push updates</li><li><b>CONDSTORE</b> =\r\nand <b>QRESYNC</b> for fast resync</li>\n<li><b>MOVE</b> instead of COPY and=\r\n EXPUNGE</li><li><b>SPECIAL-USE</b> to find Sent and =\r\nTrash</li><li><b>LITERAL+</b> to save round trips</li></ol>\n<p>Read the full issue on our site.</p></div>\r\n",
+        "flags": [],
+        "internaldate": "21-Oct-2026 16:25:00 +0300"
+      },
+      {
+        "uid": 6,
+        "raw": "From: My App <no-reply@myapp.example>\r\nTo: Test User <testuser@imapkit.local>\r\nSubject: Reset your password\r\nMessage-ID: <demo-6@imapkit.local>\r\nDate: Thu, 22 Oct 2026 06:40:00 +0000\r\nContent-Transfer-Encoding: quoted-printable\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Someone asked to reset the password of your account.</p><p><a =\r\nhref=3D\"https://myapp.example/reset?token=3Dabc123\">Choose a new =\r\npassword</a></p><p>If it was not you, ignore this message.=\r\n</p>\r\n",
+        "flags": [],
+        "internaldate": "22-Oct-2026 09:40:00 +0300"
+      },
+      {
+        "uid": 7,
+        "raw": "From: Maria Lopez <maria@contoso.example>\r\nTo: Test User <testuser@imapkit.local>\r\nSubject: Re: Q4 planning meeting\r\nMessage-ID: <demo-7@imapkit.local>\r\nDate: Thu, 22 Oct 2026 07:18:00 +0000\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nThursday at 14:00 works for me. I booked the small meeting room.\n\nMaria\n\nOn Tue, Oct 20, 2026 at 11:02, Test User <testuser@imapkit.local> wrote:\n> Hi Maria,\n>\n> could we meet this week to go over the Q4 plan?\n> Thursday or Friday afternoon would suit me.\n>\n> Thanks!\n",
+        "flags": [
+          "\\Flagged"
+        ],
+        "internaldate": "22-Oct-2026 10:18:00 +0300"
+      }
+    ]
+  },
+  "": {
+    "folders": {
+      "Drafts": {
+        "special-use": "\\Drafts"
+      },
+      "Sent": {
+        "special-use": "\\Sent"
+      },
+      "Trash": {
+        "special-use": "\\Trash"
+      },
+      "Junk": {
+        "special-use": "\\Junk"
+      }
+    }
+  }
+}

@@ -42,7 +42,9 @@ scripts\win-package.cmd    :: dist\ImapKitDesktop with the exe, the sidecar and 
 
 The installer is built from the Mac with `scripts/build-installer.sh`: it builds and stages the app on the Windows build machine (`WIN_HOST` and `WIN_DIR`, see `scripts/win-env.sh`), copies the staging folder back, signs the exe with Azure Artifact Signing (`scripts/sign-win.sh`, the same setup as EmailEngine releases, enabled by `SIGN_WIN_ACCOUNT` and `SIGN_WIN_PROFILE`), and builds `dist/ImapKitDesktop-Setup.exe` with NSIS (`brew install makensis`), signing the uninstaller and the setup on the way. The version comes from `package.json`; `sidecar/package.json` has to match it.
 
-`scripts/win-run.sh` starts a development build on the desktop of the build machine and `scripts/win-screenshot.sh out.png` takes a screenshot of it (`PAGE=0|1|2` picks the page).
+`scripts/win-run.sh` starts a development build on the desktop of the build machine and `scripts/win-screenshot.sh out.png` takes a screenshot of it (`PAGE=0|1|2|3` picks the page).
+
+The screenshots of the [imapkit.com page](https://imapkit.com/docs/apps/desktop-windows) come from `scripts/docs-screenshots.sh`, which writes them into `../imapkit/docs/static/img/desktop`. It runs the app with `--data-dir` on the fixed demo data of `scripts/screenshots/demo` (made by `scripts/screenshots/make-demo.mjs`) and drives it with `scripts/ui-steps.ps1`, so every run gives the same pictures; edit the steps in the script to change them. It needs an active desktop session on the build machine.
 
 CI builds the app, a portable zip and an unsigned installer on every push to master, they are the `ImapKitDesktop-win-x64` artifact of the CI run.
 

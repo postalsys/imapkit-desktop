@@ -372,6 +372,16 @@ void SetStatus(StatusPart part, const std::wstring& text) {
 }
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
+    // --data-dir <folder> keeps the settings and mailboxes there instead of %APPDATA%\ImapKitDesktop
+    int argc = 0;
+    if (LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc)) {
+        for (int i = 1; i + 1 < argc; i++) {
+            if (wcscmp(argv[i], L"--data-dir") == 0) {
+                TheSidecar().dataDir = argv[i + 1];
+            }
+        }
+        LocalFree(argv);
+    }
     // one copy per user: a second start shows the running one, which may be in the notification area
     if (HWND running = FindWindowW(kMainClass, nullptr)) {
         DWORD process = 0;

@@ -1,0 +1,58 @@
+{
+  "host": "127.0.0.1",
+  "imapPort": 1143,
+  "imapsPort": 1993,
+  "smtpPort": 1025,
+  "users": [
+    {
+      "username": "testuser",
+      "password": "testpass"
+    }
+  ],
+  "plugins": [
+    "ENABLE",
+    "ID",
+    "IDLE",
+    "NAMESPACE",
+    "UNSELECT",
+    "UIDPLUS",
+    "MOVE",
+    "CONDSTORE",
+    "SPECIAL-USE",
+    "LITERALPLUS",
+    "SASL-IR",
+    "AUTH-PLAIN",
+    "STARTTLS"
+  ],
+  "quirks": [],
+  "script": [],
+  "id": {
+    "enabled": false,
+    "values": {}
+  },
+  "limits": {
+    "appendLimit": null,
+    "quotaStorage": null,
+    "quotaMessages": null,
+    "quotaSoft": false,
+    "messageLimit": null,
+    "maxLiteralSize": null
+  },
+  "smtp": {
+    "requireAuth": false,
+    "maxSize": null,
+    "rejectRecipients": [
+      {
+        "address": "*@blocked.test",
+        "code": 550,
+        "message": "No such user"
+      }
+    ]
+  },
+  "rest": {
+    "enabled": false,
+    "port": 8143,
+    "host": "127.0.0.1",
+    "token": ""
+  }
+}

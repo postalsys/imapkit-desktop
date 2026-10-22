@@ -1,0 +1,16 @@
+[
+  {
+    "uid": 1,
+    "raw": "RnJvbTogVGVzdCBVc2VyIDx0ZXN0dXNlckBpbWFwa2l0LmxvY2FsPg0KVG86IE1hcmlhIExvcGV6IDxtYXJpYUBjb250b3NvLmV4YW1wbGU+DQpTdWJqZWN0OiBSZTogUTQgcGxhbm5pbmcgbWVldGluZw0KTWVzc2FnZS1JRDogPGRlbW8tc2VudC0xQGltYXBraXQubG9jYWw+DQpEYXRlOiBUaHUsIDIyIE9jdCAyMDI2IDA3OjMxOjAwICswMDAwDQpDb250ZW50LVRyYW5zZmVyLUVuY29kaW5nOiA3Yml0DQpNSU1FLVZlcnNpb246IDEuMA0KQ29udGVudC1UeXBlOiB0ZXh0L3BsYWluOyBjaGFyc2V0PXV0Zi04DQoNCkdyZWF0LCBzZWUgeW91IG9uIFRodXJzZGF5IQo=",
+    "envelope": {
+      "from": "testuser@imapkit.local",
+      "to": [
+        "maria@contoso.example",
+        "archive@contoso.example"
+      ]
+    },
+    "user": "testuser",
+    "internaldate": "2026-10-22T07:31:00.000Z",
+    "flags": []
+  }
+]

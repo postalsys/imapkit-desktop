@@ -72,6 +72,9 @@ bool Sidecar::Start(HWND notify, std::wstring& error) {
     startup.hStdError = stderrWrite;
 
     std::wstring command = L"\"" + node + L"\" \"" + script + L"\"";
+    if (!dataDir.empty()) {
+        command += L" --data-dir \"" + dataDir + L"\"";
+    }
     PROCESS_INFORMATION info = {};
     BOOL created = CreateProcessW(node.c_str(), command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr,
                                   nullptr, &startup, &info);

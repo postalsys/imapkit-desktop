@@ -112,6 +112,9 @@ public:
     void HandleLine(const std::string& line);
 
     EventHandler onEvent;
+    // the data directory of the sidecar instead of %APPDATA%\ImapKitDesktop (the --data-dir of the app), e.g. for
+    // screenshots with demo mailboxes
+    std::wstring dataDir;
 
 private:
     void ReadLoop(HANDLE pipe, UINT message);
