@@ -4,6 +4,7 @@
 import { EventEmitter } from 'node:events';
 import imapkit from 'imapkit';
 import { SMTPServer } from 'smtp-server';
+import { serverId, limitOptions, recipientRules } from './options.js';
 
 // longer chunks of protocol traffic are cut in the log, a FETCH of a large message would flood it
 const TRACE_LIMIT = 8 * 1024;
@@ -41,22 +42,6 @@ function listen(server, port, host) {
             resolve(server.address().port);
         });
     });
-}
-
-/**
- * The ID response of the server (RFC 2971) from the settings: the fields that have a value, when custom values are
- * turned on. Without any, imapkit answers ID NIL
- *
- * @param {Object} config The settings, `id: { enabled, values: { name, version, ... } }`
- * @return {Object|undefined} the `id` option of imapkit
- */
-export function serverId(config) {
-    const id = config.id || {};
-    if (!id.enabled) {
-        return undefined;
-    }
-    const fields = Object.entries(id.values || {}).filter(([key, value]) => key && typeof value === 'string' && value.trim());
-    return fields.length ? Object.fromEntries(fields.map(([key, value]) => [key, value.trim()])) : undefined;
 }
 
 export class MailServer extends EventEmitter {
@@ -99,6 +84,7 @@ export class MailServer extends EventEmitter {
             quirks: config.quirks || [],
             script: config.script || [],
             id: serverId(config),
+            ...limitOptions(config),
             tls: config.imapsPort ? { port: config.imapsPort, host: config.host } : undefined,
             // the REST API controls everything, imapkit refuses a non-loopback address without a token
             rest: rest.enabled ? { port: rest.port, host: rest.host || '127.0.0.1', token: rest.token || undefined } : undefined
@@ -348,11 +334,17 @@ export class MailServer extends EventEmitter {
             fatal: noop
         };
 
+        const settings = this.config.smtp || {};
+        // a mistake in the rules fails the start, before the server listens
+        const rejected = recipientRules(settings.rejectRecipients);
         const smtp = new SMTPServer({
             banner: 'ImapKit Desktop',
             key: credentials.key,
             cert: credentials.cert,
-            authOptional: true,
+            // without a required login, mail without one is incoming mail for INBOX
+            authOptional: !settings.requireAuth,
+            // advertised with SIZE, smtp-server refuses a larger MAIL FROM SIZE= and flags a larger message
+            size: settings.maxSize > 0 ? settings.maxSize : 0,
             logger,
             onConnect: (session, done) => {
                 const number = ++this.smtpCounter;
@@ -382,11 +374,18 @@ export class MailServer extends EventEmitter {
                 this.updateSmtpSession(session.id, 'update', { secure: !!session.secure });
                 done();
             },
+            onRcptTo: (address, session, done) => {
+                const rule = rejected.find(entry => entry.pattern.test(address.address));
+                done(rule ? Object.assign(new Error(rule.message), { responseCode: rule.code }) : null);
+            },
             onData: (stream, session, done) => {
                 const chunks = [];
                 stream.on('data', chunk => chunks.push(chunk));
                 stream.on('error', done);
                 stream.on('end', () => {
+                    if (stream.sizeExceeded) {
+                        return done(Object.assign(new Error('Message exceeds the maximum size of ' + settings.maxSize + ' bytes'), { responseCode: 552 }));
+                    }
                     const raw = Buffer.concat(chunks);
                     const id = this.smtpSessions.get(session.id);
                     if (id) {

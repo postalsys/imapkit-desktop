@@ -46,13 +46,38 @@ enum ControlId {
     IDC_ID_ENABLED,
     // the edit of each field of kIdFields, in order
     IDC_ID_FIELD = 260,
+    // the edit of each field of kLimits, in order
+    IDC_LIMIT_FIELD = 280,
+    IDC_QUOTA_SOFT = 290,
+    IDC_SMTP_REQUIRE_AUTH,
+    IDC_SMTP_MAX_SIZE,
+    IDC_SMTP_REJECT,
 };
 
-enum AdvancedTab { TAB_EXTENSIONS, TAB_ID, TAB_QUIRKS, TAB_SCRIPTS, TAB_REST, TAB_COUNT };
+enum AdvancedTab { TAB_EXTENSIONS, TAB_ID, TAB_LIMITS, TAB_QUIRKS, TAB_SCRIPTS, TAB_SMTP, TAB_REST, TAB_COUNT };
 
 // the fields of the ID response that RFC 2971 section 3.3 defines
 const char* kIdFields[] = {"name", "version", "os", "os-version", "vendor", "support-url", "address", "date", "command", "arguments", "environment"};
 constexpr int kIdFieldCount = static_cast<int>(std::size(kIdFields));
+
+// the fields of the Limits tab: the key in config.limits, and the extensions that make the limit work
+struct Limit {
+    const char* key;
+    const wchar_t* label;
+    const wchar_t* unit;
+    std::initializer_list<const char*> plugins;
+};
+const Limit kLimits[] = {
+    {"appendLimit", L"Largest message:", L"bytes", {"APPENDLIMIT"}},
+    {"quotaStorage", L"Quota, storage:", L"KB", {"QUOTA"}},
+    {"quotaMessages", L"Quota, messages:", L"messages", {"QUOTA"}},
+    {"messageLimit", L"Messages per command:", L"default 1000", {"MESSAGELIMIT", "SAVELIMIT"}},
+    {"maxLiteralSize", L"Largest literal:", L"bytes, default 67108864", {}},
+};
+constexpr int kLimitCount = static_cast<int>(std::size(kLimits));
+// the label and field widths of the rows of the Limits and SMTP tabs, at 96 DPI
+constexpr int kRowLabel = 130;
+constexpr int kRowEdit = 110;
 
 const wchar_t* kJsonFilter = L"JSON files (*.json)\0*.json\0All files (*.*)\0*.*\0";
 const wchar_t* kHostItems[] = {L"127.0.0.1 (this computer only)", L"0.0.0.0 (all network interfaces)"};
@@ -130,7 +155,7 @@ protected:
         copySettings_ = AddControl(L"BUTTON", L"&Copy", WS_TABSTOP, IDC_COPY_SETTINGS);
 
         advanced_ = AddControl(WC_TABCONTROLW, L"", WS_TABSTOP | WS_CLIPSIBLINGS, IDC_ADVANCED);
-        const wchar_t* tabNames[] = {L"IMAP Extensions", L"Server ID", L"Quirks", L"Fault Scripts", L"REST API"};
+        const wchar_t* tabNames[] = {L"IMAP Extensions", L"Server ID", L"Limits", L"Quirks", L"Fault Scripts", L"SMTP", L"REST API"};
         for (int i = 0; i < TAB_COUNT; i++) {
             TCITEMW item = {};
             item.mask = TCIF_TEXT;
@@ -156,6 +181,34 @@ protected:
             id.push_back(idLabels_[i] = AddControl(L"STATIC", (Widen(kIdFields[i]) + L":").c_str(), SS_LEFT, 0));
             id.push_back(idEdits_[i] = AddControl(L"EDIT", L"", WS_TABSTOP | ES_AUTOHSCROLL, IDC_ID_FIELD + i, WS_EX_CLIENTEDGE));
         }
+
+        auto& limits = tabs_[TAB_LIMITS];
+        limits.push_back(limitsHint_ = AddControl(L"STATIC",
+                                                  L"Limits make the server refuse what goes over them, to test how a client copes. "
+                                                  L"An empty field sets no limit. Most need their extension turned on.",
+                                                  SS_LEFT, 0));
+        for (int i = 0; i < kLimitCount; i++) {
+            limits.push_back(limitLabels_[i] = AddControl(L"STATIC", kLimits[i].label, SS_LEFT, 0));
+            limits.push_back(limitEdits_[i] = AddControl(L"EDIT", L"", WS_TABSTOP | ES_NUMBER | ES_AUTOHSCROLL, IDC_LIMIT_FIELD + i, WS_EX_CLIENTEDGE));
+            limits.push_back(limitNotes_[i] = AddControl(L"STATIC", kLimits[i].unit, SS_LEFT | SS_ENDELLIPSIS, 0));
+        }
+        limits.push_back(quotaSoft_ = AddControl(L"BUTTON", L"Quota only &warns (soft limit, an untagged NO [OVERQUOTA])", WS_TABSTOP | BS_AUTOCHECKBOX,
+                                                 IDC_QUOTA_SOFT));
+
+        auto& smtp = tabs_[TAB_SMTP];
+        smtp.push_back(smtpHint_ = AddControl(L"STATIC", L"Rules of the SMTP server, to test how a client handles refused mail.", SS_LEFT, 0));
+        smtp.push_back(smtpRequireAuth_ = AddControl(L"BUTTON", L"Require a &login to send mail (530 without, so no mail counts as incoming)",
+                                                     WS_TABSTOP | BS_AUTOCHECKBOX, IDC_SMTP_REQUIRE_AUTH));
+        smtp.push_back(smtpMaxSizeLabel_ = AddControl(L"STATIC", L"Largest message:", SS_LEFT, 0));
+        smtp.push_back(smtpMaxSize_ = AddControl(L"EDIT", L"", WS_TABSTOP | ES_NUMBER | ES_AUTOHSCROLL, IDC_SMTP_MAX_SIZE, WS_EX_CLIENTEDGE));
+        smtp.push_back(smtpMaxSizeNote_ = AddControl(L"STATIC", L"bytes, advertised with SIZE, larger mail gets 552. Empty: any size", SS_LEFT | SS_ENDELLIPSIS, 0));
+        smtp.push_back(smtpRejectLabel_ = AddControl(L"STATIC",
+                                                     L"Rejected recipients, one per line: the address (* matches anything), then the reply code "
+                                                     L"(550 when left out) and its text, e.g. *@blocked.test 550 No such user",
+                                                     SS_LEFT, 0));
+        smtp.push_back(smtpReject_ = AddControl(L"EDIT", L"", WS_TABSTOP | ES_MULTILINE | ES_WANTRETURN | ES_AUTOVSCROLL | WS_VSCROLL,
+                                                IDC_SMTP_REJECT, WS_EX_CLIENTEDGE));
+        SendMessageW(smtpReject_, WM_SETFONT, reinterpret_cast<WPARAM>(MonoFont()), TRUE);
 
         auto& quirks = tabs_[TAB_QUIRKS];
         quirks.push_back(quirksHint_ = AddControl(L"STATIC", L"Make the server behave like a known real server, to test how a client copes with it.",
@@ -262,8 +315,9 @@ protected:
     void OnCommand(int id, int code, HWND) override {
         // edits of the settings, they apply on the next start
         bool idField = id >= IDC_ID_FIELD && id < IDC_ID_FIELD + kIdFieldCount;
+        bool limitField = id >= IDC_LIMIT_FIELD && id < IDC_LIMIT_FIELD + kLimitCount;
         if (code == EN_CHANGE &&
-            (idField || id == IDC_IMAP_PORT || id == IDC_IMAPS_PORT || id == IDC_SMTP_PORT || id == IDC_REST_PORT || id == IDC_REST_TOKEN)) {
+            (idField || limitField || id == IDC_SMTP_MAX_SIZE || id == IDC_SMTP_REJECT || id == IDC_IMAP_PORT || id == IDC_IMAPS_PORT || id == IDC_SMTP_PORT || id == IDC_REST_PORT || id == IDC_REST_TOKEN)) {
             SettingsChanged();
             return;
         }
@@ -290,6 +344,8 @@ protected:
             case IDC_SMTP_ON:
             case IDC_REST_ENABLED:
             case IDC_ID_ENABLED:
+            case IDC_QUOTA_SOFT:
+            case IDC_SMTP_REQUIRE_AUTH:
                 UpdateEnabled();
                 SettingsChanged();
                 break;
@@ -397,6 +453,43 @@ private:
         }
     }
 
+    // limits: hint, a row per limit with its unit and whether its extension is on, the soft quota switch
+    void LayoutLimitsTab(const RECT& area) {
+        int width = area.right - area.left;
+        int pad = Scale(6);
+        int label = Scale(kRowLabel);
+        int field = Scale(kRowEdit);
+        int hint = Scale(30);
+        MoveWindow(limitsHint_, area.left, area.top, width, hint, TRUE);
+        for (int i = 0; i < kLimitCount; i++) {
+            int y = area.top + hint + pad + i * Scale(27);
+            MoveWindow(limitLabels_[i], area.left, y + Scale(3), label, Scale(16), TRUE);
+            MoveWindow(limitEdits_[i], area.left + label, y, field, Scale(21), TRUE);
+            MoveWindow(limitNotes_[i], area.left + label + field + pad, y + Scale(3), std::max(0, width - label - field - pad), Scale(16), TRUE);
+        }
+        MoveWindow(quotaSoft_, area.left, area.top + hint + pad + kLimitCount * Scale(27) + Scale(4), width, Scale(20), TRUE);
+    }
+
+    // SMTP: hint, login switch, size, rejected recipients filling the rest
+    void LayoutSmtpTab(const RECT& area) {
+        int width = area.right - area.left;
+        int pad = Scale(6);
+        int label = Scale(kRowLabel);
+        int field = Scale(kRowEdit);
+        int y = area.top;
+        MoveWindow(smtpHint_, area.left, y, width, Scale(20), TRUE);
+        y += Scale(20) + pad;
+        MoveWindow(smtpRequireAuth_, area.left, y, width, Scale(20), TRUE);
+        y += Scale(28);
+        MoveWindow(smtpMaxSizeLabel_, area.left, y + Scale(3), label, Scale(16), TRUE);
+        MoveWindow(smtpMaxSize_, area.left + label, y, field, Scale(21), TRUE);
+        MoveWindow(smtpMaxSizeNote_, area.left + label + field + pad, y + Scale(3), std::max(0, width - label - field - pad), Scale(16), TRUE);
+        y += Scale(32);
+        MoveWindow(smtpRejectLabel_, area.left, y, width, Scale(30), TRUE);
+        y += Scale(32);
+        MoveWindow(smtpReject_, area.left, y, width, std::max(Scale(40), static_cast<int>(area.bottom) - y), TRUE);
+    }
+
     void LayoutTabs(const RECT& area) {
         int width = area.right - area.left;
         int pad = Scale(6);
@@ -426,6 +519,9 @@ private:
             MoveWindow(idLabels_[i], x, y + Scale(3), idLabelWidth, Scale(16), TRUE);
             MoveWindow(idEdits_[i], x + idLabelWidth, y, columnWidth - idLabelWidth, Scale(21), TRUE);
         }
+
+        LayoutLimitsTab(area);
+        LayoutSmtpTab(area);
 
         // quirks: hint, list, description
         MoveWindow(quirksHint_, area.left, area.top, width, hint, TRUE);
@@ -637,6 +733,8 @@ private:
         FillUsers();
         script_ = config.value("script", json::array());
         ShowScript();
+        LoadLimits(config.value("limits", json::object()));
+        LoadSmtp(config.value("smtp", json::object()));
         json id = config.value("id", json::object());
         Button_SetCheck(idEnabled_, id.value("enabled", false) ? BST_CHECKED : BST_UNCHECKED);
         idValues_ = id.value("values", json::object());
@@ -676,7 +774,79 @@ private:
             {"quirks", CheckedNames(quirksList_, quirks_)},
             {"script", script_},
             {"id", {{"enabled", Button_GetCheck(idEnabled_) == BST_CHECKED}, {"values", IdValues()}}},
+            {"limits", ReadLimits()},
+            {"smtp", ReadSmtp()},
         };
+    }
+
+    // a number field that may stay empty: its number, or null for none
+    static json OptionalNumber(HWND edit) {
+        std::wstring text = GetWindowString(edit);
+        return text.empty() ? json(nullptr) : json(_wtoi64(text.c_str()));
+    }
+
+    static void SetOptionalNumber(HWND edit, const json& value) {
+        SetWindowTextW(edit, value.is_number_integer() ? std::to_wstring(value.get<long long>()).c_str() : L"");
+    }
+
+    void LoadLimits(const json& limits) {
+        for (int i = 0; i < kLimitCount; i++) {
+            SetOptionalNumber(limitEdits_[i], limits.value(kLimits[i].key, json(nullptr)));
+        }
+        Button_SetCheck(quotaSoft_, limits.value("quotaSoft", false) ? BST_CHECKED : BST_UNCHECKED);
+    }
+
+    json ReadLimits() {
+        json limits = {{"quotaSoft", Button_GetCheck(quotaSoft_) == BST_CHECKED}};
+        for (int i = 0; i < kLimitCount; i++) {
+            limits[kLimits[i].key] = OptionalNumber(limitEdits_[i]);
+        }
+        return limits;
+    }
+
+    void LoadSmtp(const json& smtp) {
+        Button_SetCheck(smtpRequireAuth_, smtp.value("requireAuth", false) ? BST_CHECKED : BST_UNCHECKED);
+        SetOptionalNumber(smtpMaxSize_, smtp.value("maxSize", json(nullptr)));
+        std::wstring rules;
+        for (const auto& line : smtp.value("rejectRecipients", json::array())) {
+            rules += Widen(line.is_string() ? line.get<std::string>() : "") + L"\r\n";
+        }
+        SetWindowTextW(smtpReject_, rules.c_str());
+    }
+
+    // the rejected recipients are kept as lines, the sidecar parses them (and refuses a broken one on start)
+    json ReadSmtp() {
+        json lines = json::array();
+        std::wstring text = GetWindowString(smtpReject_);
+        size_t start = 0;
+        while (start <= text.size()) {
+            size_t end = std::min(text.find(L'\n', start), text.size());
+            std::wstring line = text.substr(start, end - start);
+            line.erase(line.find_last_not_of(L" \t\r") + 1);
+            if (!line.empty()) {
+                lines.push_back(Narrow(line));
+            }
+            start = end + 1;
+        }
+        return {{"requireAuth", Button_GetCheck(smtpRequireAuth_) == BST_CHECKED}, {"maxSize", OptionalNumber(smtpMaxSize_)}, {"rejectRecipients", lines}};
+    }
+
+    // the unit of each limit, and whether the extension it needs is turned on
+    void UpdateLimitNotes() {
+        std::set<std::string> on = NameSet(CheckedNames(pluginsList_, plugins_));
+        for (int i = 0; i < kLimitCount; i++) {
+            std::wstring note = kLimits[i].unit;
+            std::wstring names;
+            bool enabled = false;
+            for (const char* plugin : kLimits[i].plugins) {
+                names += (names.empty() ? L"" : L" or ") + Widen(plugin);
+                enabled = enabled || on.count(plugin);
+            }
+            if (!names.empty()) {
+                note += enabled ? L"  (" + names + L" is on)" : L"  (needs " + names + L", turn it on in IMAP Extensions)";
+            }
+            SetWindowTextW(limitNotes_[i], note.c_str());
+        }
     }
 
     // the values of the ID fields, empty ones left out. Fields the form has no edit for (from config.json) are kept
@@ -700,6 +870,7 @@ private:
         }
         changed_ = ReadConfig() != applied_;
         EnableWindow(apply_, running_ && changed_);
+        UpdateLimitNotes();
         UpdateBanner();
         UpdateClientSettings();
     }
@@ -799,6 +970,9 @@ private:
     HWND restHint_ = nullptr, restEnabled_ = nullptr, restPortLabel_ = nullptr, restPort_ = nullptr, restTokenLabel_ = nullptr;
     HWND restToken_ = nullptr, restUrlLabel_ = nullptr, restUrl_ = nullptr, restCopy_ = nullptr, restDocs_ = nullptr;
     HWND idHint_ = nullptr, idEnabled_ = nullptr, idLabels_[kIdFieldCount] = {}, idEdits_[kIdFieldCount] = {};
+    HWND limitsHint_ = nullptr, limitLabels_[kLimitCount] = {}, limitEdits_[kLimitCount] = {}, limitNotes_[kLimitCount] = {}, quotaSoft_ = nullptr;
+    HWND smtpHint_ = nullptr, smtpRequireAuth_ = nullptr, smtpMaxSizeLabel_ = nullptr, smtpMaxSize_ = nullptr, smtpMaxSizeNote_ = nullptr;
+    HWND smtpRejectLabel_ = nullptr, smtpReject_ = nullptr;
     std::vector<HWND> tabs_[TAB_COUNT];
 
     RECT banner_ = {};

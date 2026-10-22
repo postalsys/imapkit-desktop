@@ -31,6 +31,10 @@ export const DEFAULT_CONFIG = {
     script: [],
     // the ID response (RFC 2971): custom field values when enabled, ID NIL otherwise
     id: { enabled: false, values: {} },
+    // limits for imapkit, null is no limit (see options.js)
+    limits: { appendLimit: null, quotaStorage: null, quotaMessages: null, quotaSoft: false, messageLimit: null, maxLiteralSize: null },
+    // the SMTP server: a required login, the largest message in bytes (null for any) and the rejected recipients
+    smtp: { requireAuth: false, maxSize: null, rejectRecipients: [] },
     rest: { enabled: false, port: 8143, host: '127.0.0.1', token: '' }
 };
 
