@@ -1,7 +1,7 @@
 {
     "name": "imapkit-desktop",
     "productTitle": "ImapKit Desktop",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "private": true,
     "description": "A desktop mock IMAP and SMTP server for testing email clients, powered by ImapKit",
     "homepage": "https://github.com/postalsys/imapkit-desktop",

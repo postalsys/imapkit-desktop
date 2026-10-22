@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.0](https://github.com/postalsys/imapkit-desktop/compare/v0.2.0...v0.3.0) (2026-10-22)
+
+
+### Features
+
+* keep running in the notification area when the window is closed while the server listens, one copy per user ([ce9a6a9](https://github.com/postalsys/imapkit-desktop/commit/ce9a6a9b89b132035159771544daa04bbc4b3f1b))
+* Limits and SMTP tabs, APPENDLIMIT, quota, message and literal limits, SMTP login, size limit and rejected recipients ([b4bd342](https://github.com/postalsys/imapkit-desktop/commit/b4bd342e6e03af74f9d70af1a003efbd5749f7f7))
+* rejected recipients as a table with cells edited in place ([f64b156](https://github.com/postalsys/imapkit-desktop/commit/f64b1568ecb4591ca169aa305ddd38c1d0663a2b))
+* Server ID tab, custom values for the ID response instead of ID NIL ([efe7575](https://github.com/postalsys/imapkit-desktop/commit/efe7575cacdc3fb08c4e32f5ad7ec64c88ebf4cb))
+* Server page tabs regrouped into Extensions, Limits & ID, Faults, SMTP and REST API, extensions in columns ([d358c0f](https://github.com/postalsys/imapkit-desktop/commit/d358c0f9a3bacd7bccbb0ca815981b9a9ef52dcf))
+
+
+### Bug Fixes
+
+* publish the installer only as ImapKitDesktop-Setup.exe, Check for Updates downloads it directly ([c44a167](https://github.com/postalsys/imapkit-desktop/commit/c44a16745585c110ac7a8a732a1a383d08eb8784))
+* ship the license texts of Node.js and the other bundled software in THIRD-PARTY-NOTICES.txt ([3af9412](https://github.com/postalsys/imapkit-desktop/commit/3af9412d2bd166e33b372534a71c2148bdeb8481))
+
 ## [0.2.0](https://github.com/postalsys/imapkit-desktop/compare/v0.1.0...v0.2.0) (2026-10-22)
 
 
