@@ -142,6 +142,7 @@ protected:
         }
         listHeight_ = std::clamp(listHeight_, Scale(60), std::max(Scale(60), height - y - Scale(160)));
         MoveWindow(sessions_, pad, y, width - 2 * pad, listHeight_, TRUE);
+        StretchColumn(sessions_, 6);
         y += listHeight_;
         splitters_[0].area = {0, y, width, y + 2 * pad};
         y += 2 * pad;
@@ -159,6 +160,7 @@ protected:
         MoveWindow(logLabel_, pad, y, std::max(0, filterRight - filterWidth - Scale(56) - pad), bar, TRUE);
         y += bar + pad;
         MoveWindow(log_, pad, y, width - 2 * pad, height - y - pad, TRUE);
+        StretchColumn(log_, 3, 900);
     }
 
     void OnCommand(int id, int code, HWND) override {
@@ -430,6 +432,8 @@ private:
         int index = static_cast<int>(row - rows_.begin());
         if (index + 1 >= ListView_GetItemCount(sessions_)) {
             InsertBlankRow(index + 1);
+            // a vertical scroll bar may have come with the row
+            StretchColumn(sessions_, 6);
         }
         UpdateSessionRow(index);
         UpdateSessionCount();

@@ -157,6 +157,7 @@ protected:
         }
         listHeight_ = std::clamp(listHeight_, Scale(60), std::max(Scale(60), height - y - Scale(160)));
         MoveWindow(list_, left, y, width - left, listHeight_, TRUE);
+        StretchColumn(list_, kSubjectColumn, 200);
         splitters_[1].area = {left, y + listHeight_, width, y + listHeight_ + pad};
         y += listHeight_ + pad;
 
@@ -661,6 +662,8 @@ private:
             }
         }
         rebuilding_ = false;
+        // a vertical scroll bar may have come or gone with the rows
+        StretchColumn(list_, kSubjectColumn, 200);
         InvalidateRect(list_, nullptr, TRUE);
 
         // the previewed message may have gone (deleted or moved by a client)

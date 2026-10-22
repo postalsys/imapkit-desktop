@@ -3,6 +3,7 @@
 
 #include <shlwapi.h>
 
+#include <algorithm>
 #include <ctime>
 
 std::wstring Widen(const std::string& text) {
@@ -219,6 +220,19 @@ void SetEmptyText(HWND list, const std::wstring& text) {
         return;
     }
     InvalidateRect(list, nullptr, TRUE);
+}
+
+void StretchColumn(HWND list, int column, int minimum) {
+    RECT client;
+    GetClientRect(list, &client);
+    int others = 0;
+    int count = Header_GetItemCount(ListView_GetHeader(list));
+    for (int i = 0; i < count; i++) {
+        if (i != column) {
+            others += ListView_GetColumnWidth(list, i);
+        }
+    }
+    ListView_SetColumnWidth(list, column, std::max(Scale(minimum), static_cast<int>(client.right) - others));
 }
 
 void DrawEtchedFrame(HDC dc, RECT rect) {
