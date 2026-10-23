@@ -16,20 +16,26 @@ cd "$(dirname "$0")/.."
 OUT=${1:-../imapkit/docs/static/img/desktop}
 SIZE=1120x760
 TASK=ImapKitDesktopDocs
+# the app runs under a task of its own, the steps task would otherwise stay running as long as the app does
+APP_TASK=ImapKitDesktopDocsApp
 DATA="$WIN_DIR\\screenshot-data"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-# runs a command in the desktop session of the logged in user, where the window is; waits for it unless told not to
+# runs a command in the desktop session of the logged in user, where the window is, and waits for it to finish
 desktop() {
-    ssh "$WIN_HOST" "schtasks /create /tn $TASK /tr \"$1\" /sc once /st 23:59 /it /f >nul && schtasks /run /tn $TASK >nul"
-    [ "${2:-wait}" = "wait" ] || return 0
+    run_task "$TASK" "$1"
     for _ in $(seq 1 120); do
         sleep 1
         ssh "$WIN_HOST" "schtasks /query /tn $TASK /fo csv /nh" | grep -q Running || return 0
     done
     echo "$1 did not finish" >&2
     return 1
+}
+
+# starts a command in that desktop session without waiting for it
+run_task() {
+    ssh "$WIN_HOST" "schtasks /create /tn $1 /tr \"$2\" /sc once /st 23:59 /it /f >nul && schtasks /run /tn $1 >nul"
 }
 
 # the steps of scripts/ui-steps.ps1, one per argument
@@ -58,7 +64,8 @@ shot() {
 }
 
 # window messages and screen captures need a desktop that is shown: a disconnected RDP session renders nothing
-if ! ssh "$WIN_HOST" "query user" 2>/dev/null | grep -q " Active "; then
+# (query user exits with 1 even when it lists the sessions)
+if ! grep -q " Active " <<<"$(ssh "$WIN_HOST" "query user" 2>/dev/null || true)"; then
     echo "No active desktop session on $WIN_HOST, log in (or reconnect the remote desktop) and keep it unlocked" >&2
     exit 1
 fi
@@ -67,7 +74,7 @@ scripts/win-build.sh >/dev/null
 close_app
 ssh "$WIN_HOST" "if exist $DATA rmdir /s /q $DATA & mkdir $DATA"
 scp -q scripts/screenshots/demo/*.json "$WIN_HOST:$WIN_DIR_FWD/screenshot-data/"
-desktop "$WIN_DIR\\build\\ImapKitDesktop.exe --data-dir $DATA" nowait
+run_task "$APP_TASK" "$WIN_DIR\\build\\ImapKitDesktop.exe --data-dir $DATA"
 sleep 6
 
 shot server PAGE=0
@@ -93,7 +100,7 @@ shot client PAGE=3
 shot connections PAGE=1
 
 close_app
-ssh "$WIN_HOST" "rmdir /s /q $DATA & del $WIN_DIR\\screenshot-steps.txt & schtasks /delete /tn $TASK /f >nul"
+ssh "$WIN_HOST" "rmdir /s /q $DATA & del $WIN_DIR\\screenshot-steps.txt & schtasks /delete /tn $TASK /f >nul & schtasks /delete /tn $APP_TASK /f >nul"
 
 mkdir -p "$OUT"
 for name in server server-smtp messages quoted client connections; do
