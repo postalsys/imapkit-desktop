@@ -131,10 +131,12 @@ void Preview::Configure() {
 
     controller_->put_Bounds(bounds_);
     controller_->put_IsVisible(IsWindowVisible(parent_) ? TRUE : FALSE);
-    if (pending_.empty()) {
+    // moved out first: Show() clears pending_, which would empty the document it is given
+    std::wstring pending = std::move(pending_);
+    if (pending.empty()) {
         Clear();
     } else {
-        Show(pending_, remoteImages_);
+        Show(pending, remoteImages_);
     }
 }
 
