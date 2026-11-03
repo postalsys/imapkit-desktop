@@ -55,11 +55,82 @@ enum ControlId {
     IDC_SMTP_REJECT,
     IDC_SMTP_REJECT_ADD,
     IDC_SMTP_REJECT_REMOVE,
+    IDC_OAUTH_ENABLED,
+    IDC_OAUTH_PORT,
+    IDC_OAUTH_ISSUER,
+    IDC_OAUTH_COPY,
+    IDC_OAUTH_OPEN,
+    IDC_OAUTH_CONSENT,
+    IDC_OAUTH_LIFETIME,
+    IDC_OAUTH_REFRESH,
+    IDC_OAUTH_CLIENTS,
+    IDC_OAUTH_CLIENT_ADD,
+    IDC_OAUTH_CLIENT_REMOVE,
+    IDC_OAUTH_NEXT,
+    IDC_OAUTH_QUEUE,
+    IDC_OAUTH_CLEAR,
+    IDC_OAUTH_TOKENS,
+    IDC_OAUTH_EXPIRE,
+    IDC_OAUTH_REVOKE,
+    IDC_OAUTH_DOCS,
+    // the commands of the Sign-in menu of a client, one per entry of kClientConsents
+    IDC_OAUTH_CLIENT_CONSENT = 340,
 };
 
 // the IMAP extensions, then what changes how the server answers: limits and the ID response, faults on purpose (quirk
-// presets and script rules), the SMTP server's rules, and the REST API for test suites
-enum AdvancedTab { TAB_EXTENSIONS, TAB_LIMITS, TAB_FAULTS, TAB_SMTP, TAB_REST, TAB_COUNT };
+// presets and script rules), the SMTP server's rules, the OAuth provider for sign-in tests, and the REST API for test
+// suites
+enum AdvancedTab { TAB_EXTENSIONS, TAB_LIMITS, TAB_FAULTS, TAB_SMTP, TAB_OAUTH, TAB_REST, TAB_COUNT };
+
+// a value of the settings and how the OAuth tab shows it
+struct Choice {
+    const char* value;
+    const wchar_t* label;
+};
+// what a sign-in does, the Sign-ins combo box
+const Choice kConsents[] = {
+    {"prompt", L"Ask: show the consent page in the browser"},
+    {"approve", L"Always allow: redirect with a code right away"},
+    {"deny", L"Always deny: redirect with access_denied"},
+};
+// what a sign-in of one client does, the Sign-in column of the clients
+const Choice kClientConsents[] = {{"default", L"As set above"}, {"prompt", L"Ask"}, {"approve", L"Always allow"}, {"deny", L"Always deny"}};
+// the outcome of the next sign-in only, queued with the Queue button. error: values are OAuth errors
+const Choice kNextOutcomes[] = {
+    {"deny", L"Deny it (access_denied)"},
+    {"approve", L"Allow it without asking"},
+    {"prompt", L"Show the consent page"},
+    {"error:temporarily_unavailable", L"Fail with temporarily_unavailable"},
+    {"error:server_error", L"Fail with server_error"},
+    {"error:invalid_scope", L"Fail with invalid_scope"},
+    {"wrong-state", L"Allow, but redirect with a wrong state"},
+    {"wrong-iss", L"Allow, but redirect with a wrong iss"},
+    {"no-redirect", L"Never redirect (the client times out)"},
+};
+
+// "1 token" or "2 tokens"
+std::wstring Count(int count, const std::wstring& noun) {
+    return std::to_wstring(count) + L" " + noun + (count == 1 ? L"" : L"s");
+}
+
+// the label of a value, or the value itself
+template <size_t N>
+std::wstring ChoiceLabel(const Choice (&choices)[N], const std::string& value) {
+    for (const Choice& choice : choices) {
+        if (value == choice.value) {
+            return choice.label;
+        }
+    }
+    return Widen(value);
+}
+
+// a registered OAuth client as the clients list shows it, the consent as its value (default, prompt ...)
+struct ClientRow {
+    std::wstring id;
+    std::wstring name;
+    std::string consent;
+    std::wstring redirectUris;
+};
 
 // the fields of the ID response that RFC 2971 section 3.3 defines
 const char* kIdFields[] = {"name", "version", "os", "os-version", "vendor", "support-url", "address", "date", "command", "arguments", "environment"};
@@ -126,6 +197,9 @@ public:
             });
         } else if (name == "status") {
             ShowState(data);
+        } else if (name == "oauth") {
+            // a burst of events (authorize, code, token) is shown once
+            SetTimer(hwnd_, kOAuthTimer, 200, nullptr);
         }
     }
 
@@ -163,7 +237,7 @@ protected:
         copySettings_ = AddControl(L"BUTTON", L"&Copy", WS_TABSTOP, IDC_COPY_SETTINGS);
 
         advanced_ = AddControl(WC_TABCONTROLW, L"", WS_TABSTOP | WS_CLIPSIBLINGS, IDC_ADVANCED);
-        const wchar_t* tabNames[] = {L"Extensions", L"Limits && ID", L"Faults", L"SMTP", L"REST API"};
+        const wchar_t* tabNames[] = {L"Extensions", L"Limits && ID", L"Faults", L"SMTP", L"OAuth", L"REST API"};
         for (int i = 0; i < TAB_COUNT; i++) {
             TCITEMW item = {};
             item.mask = TCIF_TEXT;
@@ -235,6 +309,59 @@ protected:
         SetEmptyText(smtpReject_, L"No rejected recipients, every address is accepted. Add a row to refuse one.");
         smtp.push_back(smtpRejectAdd_ = AddControl(L"BUTTON", L"Add &Row", WS_TABSTOP, IDC_SMTP_REJECT_ADD));
         smtp.push_back(smtpRejectRemove_ = AddControl(L"BUTTON", L"Remo&ve Row", WS_TABSTOP, IDC_SMTP_REJECT_REMOVE));
+
+        auto& oauth = tabs_[TAB_OAUTH];
+        oauth.push_back(oauthHint_ = AddControl(L"STATIC",
+                                                L"A test OAuth 2.0 / OpenID Connect provider: email clients sign in through the browser without "
+                                                L"a password and log in to IMAP and SMTP with its tokens.",
+                                                SS_LEFT, 0));
+        oauth.push_back(oauthEnabled_ = AddControl(L"BUTTON", L"E&nable the OAuth provider (turns on the XOAUTH2 and OAUTHBEARER extensions too)",
+                                                   WS_TABSTOP | BS_AUTOCHECKBOX, IDC_OAUTH_ENABLED));
+        oauth.push_back(oauthPortLabel_ = AddControl(L"STATIC", L"Port:", SS_LEFT, 0));
+        oauth.push_back(oauthPort_ = AddControl(L"EDIT", L"", WS_TABSTOP | ES_NUMBER, IDC_OAUTH_PORT, WS_EX_CLIENTEDGE));
+        oauth.push_back(oauthIssuerLabel_ = AddControl(L"STATIC", L"Issuer:", SS_LEFT, 0));
+        oauth.push_back(oauthIssuer_ = AddControl(L"EDIT", L"", ES_READONLY | ES_AUTOHSCROLL, IDC_OAUTH_ISSUER, WS_EX_CLIENTEDGE));
+        oauth.push_back(oauthCopy_ = AddControl(L"BUTTON", L"Cop&y", WS_TABSTOP, IDC_OAUTH_COPY));
+        oauth.push_back(oauthOpen_ = AddControl(L"BUTTON", L"O&pen", WS_TABSTOP, IDC_OAUTH_OPEN));
+        oauth.push_back(oauthConsentLabel_ = AddControl(L"STATIC", L"Sign-ins:", SS_LEFT, 0));
+        oauth.push_back(oauthConsent_ = AddControl(WC_COMBOBOXW, L"", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, IDC_OAUTH_CONSENT));
+        for (const Choice& choice : kConsents) {
+            ComboBox_AddString(oauthConsent_, choice.label);
+        }
+        oauth.push_back(oauthLifetimeLabel_ = AddControl(L"STATIC", L"Access tokens last:", SS_LEFT, 0));
+        oauth.push_back(oauthLifetime_ = AddControl(L"EDIT", L"", WS_TABSTOP | ES_NUMBER, IDC_OAUTH_LIFETIME, WS_EX_CLIENTEDGE));
+        oauth.push_back(oauthLifetimeNote_ = AddControl(L"STATIC", L"seconds, a short time tests the refresh of a client", SS_LEFT | SS_ENDELLIPSIS, 0));
+        oauth.push_back(oauthRefresh_ = AddControl(L"BUTTON", L"Give a refresh token to every sign-in, like Google (otherwise only for the offline_access scope)",
+                                                   WS_TABSTOP | BS_AUTOCHECKBOX, IDC_OAUTH_REFRESH));
+        oauth.push_back(oauthUserTip_ = AddControl(L"STATIC", L"", SS_LEFT, 0));
+        oauth.push_back(oauthClientsGroup_ = AddControl(L"BUTTON", L"Clients", BS_GROUPBOX, 0));
+        oauth.push_back(oauthClients_ = AddControl(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS, IDC_OAUTH_CLIENTS,
+                                                   WS_EX_CLIENTEDGE));
+        ListView_SetExtendedListViewStyle(oauthClients_, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
+        AddColumns(oauthClients_, {{L"Client ID", 110}, {L"Name", 200}, {L"Sign-in", 90}, {L"Redirect URIs", 130}});
+        SetEmptyText(oauthClients_, L"No clients of your own, the three ImapKit test clients are registered. Add a row for the client ID of your app.");
+        oauth.push_back(oauthClientAdd_ = AddControl(L"BUTTON", L"Add C&lient", WS_TABSTOP, IDC_OAUTH_CLIENT_ADD));
+        oauth.push_back(oauthClientRemove_ = AddControl(L"BUTTON", L"Remove Clien&t", WS_TABSTOP, IDC_OAUTH_CLIENT_REMOVE));
+        oauth.push_back(oauthClientsNote_ = AddControl(L"STATIC", L"Double-click a cell to change it. No redirect URIs: loopback (127.0.0.1, localhost) on any port.",
+                                                       SS_LEFT | SS_ENDELLIPSIS, 0));
+        oauth.push_back(oauthLiveGroup_ = AddControl(L"BUTTON", L"While it runs", BS_GROUPBOX, 0));
+        oauth.push_back(oauthNextLabel_ = AddControl(L"STATIC", L"Next sign-in:", SS_LEFT, 0));
+        oauth.push_back(oauthNext_ = AddControl(WC_COMBOBOXW, L"", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, IDC_OAUTH_NEXT));
+        for (const Choice& choice : kNextOutcomes) {
+            ComboBox_AddString(oauthNext_, choice.label);
+        }
+        ComboBox_SetCurSel(oauthNext_, 0);
+        oauth.push_back(oauthQueue_ = AddControl(L"BUTTON", L"&Queue", WS_TABSTOP, IDC_OAUTH_QUEUE));
+        oauth.push_back(oauthClear_ = AddControl(L"BUTTON", L"Clea&r", WS_TABSTOP, IDC_OAUTH_CLEAR));
+        oauth.push_back(oauthQueued_ = AddControl(L"STATIC", L"", SS_LEFT | SS_ENDELLIPSIS, 0));
+        oauth.push_back(oauthTokens_ = AddControl(WC_LISTVIEWW, L"", WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS, IDC_OAUTH_TOKENS,
+                                                  WS_EX_CLIENTEDGE));
+        ListView_SetExtendedListViewStyle(oauthTokens_, LVS_EX_FULLROWSELECT);
+        AddColumns(oauthTokens_, {{L"User", 150}, {L"Client", 110}, {L"Type", 60}, {L"Expires", 130}, {L"State", 70}});
+        SetEmptyText(oauthTokens_, L"No tokens yet. They show up here when a client signs in.");
+        oauth.push_back(oauthExpire_ = AddControl(L"BUTTON", L"E&xpire Access Tokens", WS_TABSTOP, IDC_OAUTH_EXPIRE));
+        oauth.push_back(oauthRevoke_ = AddControl(L"BUTTON", L"Re&voke All", WS_TABSTOP, IDC_OAUTH_REVOKE));
+        oauth.push_back(oauthDocs_ = AddControl(L"BUTTON", L"OAuth &Guide", WS_TABSTOP, IDC_OAUTH_DOCS));
 
         auto& rest = tabs_[TAB_REST];
         rest.push_back(restHint_ = AddControl(L"STATIC",
@@ -323,8 +450,16 @@ protected:
         bool idField = id >= IDC_ID_FIELD && id < IDC_ID_FIELD + kIdFieldCount;
         bool limitField = id >= IDC_LIMIT_FIELD && id < IDC_LIMIT_FIELD + kLimitCount;
         if (code == EN_CHANGE &&
-            (idField || limitField || id == IDC_SMTP_MAX_SIZE || id == IDC_IMAP_PORT || id == IDC_IMAPS_PORT || id == IDC_SMTP_PORT || id == IDC_REST_PORT || id == IDC_REST_TOKEN)) {
+            (idField || limitField || id == IDC_SMTP_MAX_SIZE || id == IDC_IMAP_PORT || id == IDC_IMAPS_PORT || id == IDC_SMTP_PORT || id == IDC_REST_PORT || id == IDC_REST_TOKEN || id == IDC_OAUTH_PORT || id == IDC_OAUTH_LIFETIME)) {
             SettingsChanged();
+            return;
+        }
+        if (id == IDC_OAUTH_CONSENT && code == CBN_SELCHANGE) {
+            SettingsChanged();
+            return;
+        }
+        if (id >= IDC_OAUTH_CLIENT_CONSENT && id < IDC_OAUTH_CLIENT_CONSENT + static_cast<int>(std::size(kClientConsents))) {
+            SetClientConsent(kClientConsents[id - IDC_OAUTH_CLIENT_CONSENT].value);
             return;
         }
         if (id == IDC_HOST && (code == CBN_EDITCHANGE || code == CBN_SELCHANGE)) {
@@ -349,6 +484,8 @@ protected:
             case IDC_IMAPS_ON:
             case IDC_SMTP_ON:
             case IDC_REST_ENABLED:
+            case IDC_OAUTH_ENABLED:
+            case IDC_OAUTH_REFRESH:
             case IDC_ID_ENABLED:
             case IDC_QUOTA_SOFT:
             case IDC_SMTP_REQUIRE_AUTH:
@@ -405,6 +542,47 @@ protected:
             case IDC_REST_DOCS:
                 ShellExecuteW(nullptr, L"open", L"https://imapkit.com/docs/rest-api/overview", nullptr, nullptr, SW_SHOWNORMAL);
                 break;
+            case IDC_OAUTH_COPY:
+                CopyToClipboard(hwnd_, GetWindowString(oauthIssuer_));
+                SetStatus(STATUS_INFO, L"OAuth issuer copied");
+                break;
+            case IDC_OAUTH_OPEN:
+                // the index page lists the issuer, the clients, the users and the endpoints
+                ShellExecuteW(nullptr, L"open", (GetWindowString(oauthIssuer_) + L"/").c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                break;
+            case IDC_OAUTH_DOCS:
+                ShellExecuteW(nullptr, L"open", L"https://imapkit.com/docs/guides/oauth", nullptr, nullptr, SW_SHOWNORMAL);
+                break;
+            case IDC_OAUTH_CLIENT_ADD:
+                clients_.push_back({L"", L"", "default", L""});
+                FillClients(static_cast<int>(clients_.size()) - 1);
+                EditClient(static_cast<int>(clients_.size()) - 1, 0);
+                break;
+            case IDC_OAUTH_CLIENT_REMOVE:
+                RemoveClient();
+                break;
+            case IDC_OAUTH_QUEUE:
+                QueueNextSignIn();
+                break;
+            case IDC_OAUTH_CLEAR:
+                TheSidecar().Call("oauthClearQueue", json::object(), [this](const json&, const std::string&) { RefreshOAuth(); });
+                break;
+            case IDC_OAUTH_EXPIRE:
+                TheSidecar().Call("oauthExpire", json::object(), [this](const json& result, const std::string& error) {
+                    SetStatus(STATUS_INFO,
+                              error.empty() ? Count(result.value("expired", 0), L"access token") + L" expired, the next login with one fails"
+                                            : Widen(error));
+                    RefreshOAuth();
+                });
+                break;
+            case IDC_OAUTH_REVOKE:
+                TheSidecar().Call("oauthRevoke", json::object(), [this](const json& result, const std::string& error) {
+                    SetStatus(STATUS_INFO,
+                              error.empty() ? Count(result.value("revoked", 0), L"token") + L" revoked, clients have to sign in again"
+                                            : Widen(error));
+                    RefreshOAuth();
+                });
+                break;
         }
     }
 
@@ -415,6 +593,9 @@ protected:
         }
         if (header->hwndFrom == smtpReject_) {
             return OnRejectNotify(header);
+        }
+        if (header->hwndFrom == oauthClients_) {
+            return OnClientNotify(header);
         }
         if (header->code == NM_DBLCLK && header->hwndFrom == usersList_) {
             EditUser(ListView_GetNextItem(usersList_, -1, LVNI_SELECTED));
@@ -438,9 +619,14 @@ protected:
         return 0;
     }
 
-    LRESULT OnMessage(UINT message, WPARAM, LPARAM, bool& handled) override {
+    LRESULT OnMessage(UINT message, WPARAM wParam, LPARAM, bool& handled) override {
         if (message == WM_APP) {
             SettingsChanged();
+            return 0;
+        }
+        if (message == WM_TIMER && wParam == kOAuthTimer) {
+            KillTimer(hwnd_, kOAuthTimer);
+            RefreshOAuth();
             return 0;
         }
         if (message == WM_PAINT) {
@@ -471,6 +657,10 @@ private:
             for (HWND control : tabs_[i]) {
                 ShowWindow(control, i == index ? SW_SHOW : SW_HIDE);
             }
+        }
+        // the hint and the tip of the OAuth tab depend on the room and the user names
+        if (index == TAB_OAUTH && oauthArea_.right > oauthArea_.left) {
+            LayoutOAuthTab(oauthArea_);
         }
     }
 
@@ -574,6 +764,86 @@ private:
         MoveWindow(smtpRejectRemove_, inner.left + Scale(90) + pad, inner.bottom - buttons, Scale(90), buttons, TRUE);
     }
 
+    // OAuth: the provider settings, its clients, and what happens while it runs (the next sign-in, the tokens). At the
+    // smallest window size every part keeps its controls on screen, the lists give up height first
+    void LayoutOAuthTab(const RECT& area) {
+        oauthArea_ = area;
+        int width = area.right - area.left;
+        int pad = Scale(6);
+        int row = Scale(26);
+        int label = Scale(110);
+        int button = Scale(64);
+        int y = area.top;
+        // the tab is visible when its checkbox is, the hint and the tip are shown or hidden here
+        bool visible = IsWindowVisible(oauthEnabled_) != FALSE;
+        // a short window leaves the hint out, so that the lists keep some rows
+        bool compact = area.bottom - area.top < Scale(470);
+        ShowWindow(oauthHint_, visible && !compact ? SW_SHOW : SW_HIDE);
+        MoveWindow(oauthHint_, area.left, y, width, Scale(30), TRUE);
+        if (!compact) {
+            y += Scale(34);
+        }
+        MoveWindow(oauthEnabled_, area.left, y, width, Scale(20), TRUE);
+        y += row;
+        // the port and the token lifetime share a row
+        MoveWindow(oauthPortLabel_, area.left, y + Scale(3), label, Scale(16), TRUE);
+        MoveWindow(oauthPort_, area.left + label, y, Scale(60), Scale(21), TRUE);
+        int second = area.left + label + Scale(76);
+        MoveWindow(oauthLifetimeLabel_, second, y + Scale(3), Scale(104), Scale(16), TRUE);
+        MoveWindow(oauthLifetime_, second + Scale(104), y, Scale(60), Scale(21), TRUE);
+        MoveWindow(oauthLifetimeNote_, second + Scale(170), y + Scale(3), std::max(0, static_cast<int>(area.right) - second - Scale(170)), Scale(16), TRUE);
+        y += row;
+        MoveWindow(oauthIssuerLabel_, area.left, y + Scale(3), label, Scale(16), TRUE);
+        int issuerWidth = std::max(Scale(80), width - label - 2 * (button + pad));
+        MoveWindow(oauthIssuer_, area.left + label, y, issuerWidth, Scale(21), TRUE);
+        MoveWindow(oauthCopy_, area.left + label + issuerWidth + pad, y - Scale(1), button, Scale(23), TRUE);
+        MoveWindow(oauthOpen_, area.left + label + issuerWidth + 2 * pad + button, y - Scale(1), button, Scale(23), TRUE);
+        y += row;
+        MoveWindow(oauthConsentLabel_, area.left, y + Scale(3), label, Scale(16), TRUE);
+        MoveWindow(oauthConsent_, area.left + label, y, std::min(Scale(300), width - label), Scale(200), TRUE);
+        y += row;
+        MoveWindow(oauthRefresh_, area.left, y, width, Scale(20), TRUE);
+        y += row;
+        // the tip takes room only while it shows
+        bool tip = GetWindowTextLengthW(oauthUserTip_) > 0;
+        ShowWindow(oauthUserTip_, tip && visible ? SW_SHOW : SW_HIDE);
+        MoveWindow(oauthUserTip_, area.left, y, width, Scale(28), TRUE);
+        if (tip) {
+            y += Scale(32);
+        }
+
+        // the clients take up to 40 percent of the rest, the tokens what is left
+        int rest = area.bottom - y;
+        int clientsHeight = std::clamp(rest * 2 / 5, Scale(104), Scale(170));
+        RECT clients = PlaceGroup(oauthClientsGroup_, area.left, y, width, clientsHeight);
+        int clientButtons = clients.bottom - Scale(23);
+        MoveWindow(oauthClients_, clients.left, clients.top, clients.right - clients.left, clientButtons - clients.top - Scale(4), TRUE);
+        StretchColumn(oauthClients_, 1);
+        int wide = Scale(100);
+        MoveWindow(oauthClientAdd_, clients.left, clientButtons, wide, Scale(23), TRUE);
+        MoveWindow(oauthClientRemove_, clients.left + wide + Scale(4), clientButtons, wide, Scale(23), TRUE);
+        MoveWindow(oauthClientsNote_, clients.left + 2 * wide + Scale(12), clientButtons + Scale(4),
+                   std::max(0, static_cast<int>(clients.right - clients.left) - 2 * wide - Scale(12)), Scale(16), TRUE);
+        y += clientsHeight + pad;
+
+        RECT live = PlaceGroup(oauthLiveGroup_, area.left, y, width, area.bottom - y);
+        int liveWidth = live.right - live.left;
+        MoveWindow(oauthNextLabel_, live.left, live.top + Scale(3), Scale(80), Scale(16), TRUE);
+        int comboWidth = std::max(Scale(120), std::min(Scale(250), liveWidth - Scale(80) - 2 * (button + pad)));
+        MoveWindow(oauthNext_, live.left + Scale(80), live.top, comboWidth, Scale(200), TRUE);
+        MoveWindow(oauthQueue_, live.left + Scale(80) + comboWidth + pad, live.top - Scale(1), button, Scale(23), TRUE);
+        MoveWindow(oauthClear_, live.left + Scale(80) + comboWidth + 2 * pad + button, live.top - Scale(1), button, Scale(23), TRUE);
+        MoveWindow(oauthQueued_, live.left, live.top + Scale(27), liveWidth, Scale(16), TRUE);
+        int tokensTop = live.top + Scale(46);
+        int bottomButtons = live.bottom - Scale(23);
+        MoveWindow(oauthTokens_, live.left, tokensTop, liveWidth, std::max(Scale(30), bottomButtons - tokensTop - Scale(4)), TRUE);
+        StretchColumn(oauthTokens_, 0);
+        int action = Scale(130);
+        MoveWindow(oauthExpire_, live.left, bottomButtons, action, Scale(23), TRUE);
+        MoveWindow(oauthRevoke_, live.left + action + Scale(4), bottomButtons, Scale(90), Scale(23), TRUE);
+        MoveWindow(oauthDocs_, live.right - Scale(100), bottomButtons, Scale(100), Scale(23), TRUE);
+    }
+
     void LayoutTabs(const RECT& area) {
         int width = area.right - area.left;
         int pad = Scale(6);
@@ -593,6 +863,7 @@ private:
         LayoutLimitsTab(area);
         LayoutFaultsTab(area);
         LayoutSmtpTab(area);
+        LayoutOAuthTab(area);
 
         // REST API: hint, enable, port, token, address, reference
         int restHint = Scale(44);
@@ -751,6 +1022,12 @@ private:
         for (HWND control : {restPortLabel_, restPort_, restTokenLabel_, restToken_}) {
             EnableWindow(control, rest);
         }
+        bool oauth = Button_GetCheck(oauthEnabled_) == BST_CHECKED;
+        for (HWND control : {oauthPortLabel_, oauthPort_, oauthConsentLabel_, oauthConsent_, oauthLifetimeLabel_, oauthLifetime_, oauthLifetimeNote_,
+                             oauthRefresh_, oauthClients_, oauthClientAdd_, oauthClientRemove_, oauthClientsNote_}) {
+            EnableWindow(control, oauth);
+        }
+        UpdateOAuthLive();
         bool id = Button_GetCheck(idEnabled_) == BST_CHECKED;
         for (int i = 0; i < kIdFieldCount; i++) {
             EnableWindow(idLabels_[i], id);
@@ -782,6 +1059,8 @@ private:
         SetWindowTextW(restPort_, std::to_wstring(rest.value("port", restDefaults.value("port", 0))).c_str());
         SetWindowTextW(restToken_, JsonText(rest, "token").c_str());
         restHost_ = rest.value("host", restDefaults.value("host", std::string("127.0.0.1")));
+
+        LoadOAuth(config.value("oauth", json::object()));
 
         users_.clear();
         for (const auto& user : config.value("users", json::array())) {
@@ -833,7 +1112,227 @@ private:
             {"id", {{"enabled", Button_GetCheck(idEnabled_) == BST_CHECKED}, {"values", IdValues()}}},
             {"limits", ReadLimits()},
             {"smtp", ReadSmtp()},
+            {"oauth", ReadOAuth()},
         };
+    }
+
+    void LoadOAuth(const json& oauth) {
+        json defaults = defaults_.value("oauth", json::object());
+        Button_SetCheck(oauthEnabled_, oauth.value("enabled", false) ? BST_CHECKED : BST_UNCHECKED);
+        SetWindowTextW(oauthPort_, std::to_wstring(oauth.value("port", defaults.value("port", 8085))).c_str());
+        std::string consent = oauth.value("consent", std::string("prompt"));
+        int selected = 0;
+        for (int i = 0; i < static_cast<int>(std::size(kConsents)); i++) {
+            if (consent == kConsents[i].value) {
+                selected = i;
+            }
+        }
+        ComboBox_SetCurSel(oauthConsent_, selected);
+        SetWindowTextW(oauthLifetime_, std::to_wstring(oauth.value("tokenLifetime", defaults.value("tokenLifetime", 3600))).c_str());
+        Button_SetCheck(oauthRefresh_, oauth.value("alwaysRefresh", true) ? BST_CHECKED : BST_UNCHECKED);
+        clients_.clear();
+        for (const auto& client : oauth.value("clients", defaults.value("clients", json::array()))) {
+            clients_.push_back({JsonText(client, "id"), JsonText(client, "name"), client.value("consent", std::string("default")), JsonText(client, "redirectUris")});
+        }
+        FillClients(-1);
+    }
+
+    json ReadOAuth() {
+        json clients = json::array();
+        for (const ClientRow& row : clients_) {
+            if (row.id.empty()) {
+                continue;
+            }
+            clients.push_back({{"id", Narrow(row.id)}, {"name", Narrow(row.name)}, {"consent", row.consent}, {"redirectUris", Narrow(row.redirectUris)}});
+        }
+        int consent = ComboBox_GetCurSel(oauthConsent_);
+        return {{"enabled", Button_GetCheck(oauthEnabled_) == BST_CHECKED},
+                {"port", _wtoi(GetWindowString(oauthPort_).c_str())},
+                {"consent", kConsents[consent < 0 ? 0 : consent].value},
+                {"tokenLifetime", _wtoi(GetWindowString(oauthLifetime_).c_str())},
+                {"alwaysRefresh", Button_GetCheck(oauthRefresh_) == BST_CHECKED},
+                {"clients", clients}};
+    }
+
+    void FillClients(int select) {
+        ListView_DeleteAllItems(oauthClients_);
+        for (int i = 0; i < static_cast<int>(clients_.size()); i++) {
+            std::wstring consent = ChoiceLabel(kClientConsents, clients_[i].consent);
+            std::wstring uris = clients_[i].redirectUris.empty() ? L"loopback, any port" : clients_[i].redirectUris;
+            LVITEMW item = {};
+            item.mask = LVIF_TEXT;
+            item.iItem = i;
+            item.pszText = clients_[i].id.data();
+            ListView_InsertItem(oauthClients_, &item);
+            ListView_SetItemText(oauthClients_, i, 1, clients_[i].name.data());
+            ListView_SetItemText(oauthClients_, i, 2, consent.data());
+            ListView_SetItemText(oauthClients_, i, 3, uris.data());
+        }
+        if (select >= 0) {
+            ListView_SetItemState(oauthClients_, select, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        }
+    }
+
+    // the ID, name and redirect URIs are edited in place, the Sign-in column with a menu of its values
+    void EditClient(int row, int column) {
+        if (row < 0 || row >= static_cast<int>(clients_.size())) {
+            return;
+        }
+        if (column == 2) {
+            ShowClientConsentMenu(row);
+            return;
+        }
+        if (column == 3 && clients_[row].redirectUris.empty()) {
+            // the cell shows a hint then, the edit starts empty
+            ListView_SetItemText(oauthClients_, row, 3, const_cast<wchar_t*>(L""));
+        }
+        EditListCell(oauthClients_, row, column, false, [this, row, column](const std::wstring& text, int move) {
+            if (row >= static_cast<int>(clients_.size())) {
+                return;
+            }
+            ClientRow& client = clients_[row];
+            (column == 0 ? client.id : column == 1 ? client.name : client.redirectUris) = text;
+            FillClients(row);
+            SettingsChanged();
+            int next = column + move;
+            if (move && next >= 0 && next < 4 && next != 2) {
+                EditClient(row, next);
+            }
+        });
+    }
+
+    void ShowClientConsentMenu(int row) {
+        ListView_SetItemState(oauthClients_, row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        HMENU menu = CreatePopupMenu();
+        for (int i = 0; i < static_cast<int>(std::size(kClientConsents)); i++) {
+            UINT flags = MF_STRING | (clients_[row].consent == kClientConsents[i].value ? MF_CHECKED : 0);
+            AppendMenuW(menu, flags, IDC_OAUTH_CLIENT_CONSENT + i, kClientConsents[i].label);
+        }
+        RECT cell = {};
+        ListView_GetSubItemRect(oauthClients_, row, 2, LVIR_LABEL, &cell);
+        TrackContextMenu(menu, hwnd_, oauthClients_, {-1, -1}, cell);
+    }
+
+    void SetClientConsent(const char* consent) {
+        int row = ListView_GetNextItem(oauthClients_, -1, LVNI_SELECTED);
+        if (row >= 0 && row < static_cast<int>(clients_.size())) {
+            clients_[row].consent = consent;
+            FillClients(row);
+            SettingsChanged();
+        }
+    }
+
+    void RemoveClient() {
+        int row = ListView_GetNextItem(oauthClients_, -1, LVNI_SELECTED);
+        if (row >= 0 && row < static_cast<int>(clients_.size())) {
+            clients_.erase(clients_.begin() + row);
+            FillClients(std::min(row, static_cast<int>(clients_.size()) - 1));
+            SettingsChanged();
+        }
+    }
+
+    LRESULT OnClientNotify(NMHDR* header) {
+        if (header->code == NM_DBLCLK) {
+            LVHITTESTINFO hit = {};
+            hit.pt = reinterpret_cast<NMITEMACTIVATE*>(header)->ptAction;
+            if (ListView_SubItemHitTest(oauthClients_, &hit) >= 0) {
+                EditClient(hit.iItem, hit.iSubItem);
+            }
+        } else if (header->code == LVN_KEYDOWN) {
+            WORD key = reinterpret_cast<NMLVKEYDOWN*>(header)->wVKey;
+            int row = ListView_GetNextItem(oauthClients_, -1, LVNI_SELECTED);
+            if ((key == VK_F2 || key == VK_RETURN) && row >= 0) {
+                EditClient(row, 0);
+            } else if (key == VK_DELETE) {
+                RemoveClient();
+            }
+        }
+        return 0;
+    }
+
+    void QueueNextSignIn() {
+        int selected = ComboBox_GetCurSel(oauthNext_);
+        std::string value = kNextOutcomes[selected < 0 ? 0 : selected].value;
+        json decision = value.rfind("error:", 0) == 0 ? json{{"error", value.substr(6)}} : json(value);
+        TheSidecar().Call("oauthQueue", {{"decision", decision}}, [this](const json&, const std::string& error) {
+            if (!error.empty()) {
+                SetStatus(STATUS_INFO, L"Queueing failed: " + Widen(error));
+            }
+            RefreshOAuth();
+        });
+    }
+
+    // the issuer, the queued outcomes and the tokens of the running provider
+    void RefreshOAuth() {
+        TheSidecar().Call("oauthState", json::object(), [this](const json& result, const std::string& error) {
+            if (error.empty()) {
+                oauthState_ = result;
+                ShowOAuthState();
+            }
+        });
+    }
+
+    void ShowOAuthState() {
+        bool running = oauthState_.value("running", false);
+        SetWindowTextW(oauthIssuer_, running ? JsonText(oauthState_, "issuer").c_str() : L"(when the OAuth provider runs)");
+        json decisions = oauthState_.value("decisions", json::array());
+        std::wstring queued;
+        for (const auto& item : decisions) {
+            const json& decision = item["decision"];
+            std::string value = decision.is_string() ? decision.get<std::string>() : "error:" + JsonString(decision, "error");
+            queued += (queued.empty() ? L"" : L", then ") + ChoiceLabel(kNextOutcomes, value);
+        }
+        SetWindowTextW(oauthQueued_, running ? (queued.empty() ? L"Nothing queued, sign-ins go as set above." : (L"Queued: " + queued).c_str())
+                                             : L"Start the server with the OAuth provider on to queue outcomes and see tokens.");
+        ListView_DeleteAllItems(oauthTokens_);
+        int index = 0;
+        for (const auto& token : oauthState_.value("tokens", json::array())) {
+            bool refresh = JsonString(token, "type") == "refresh";
+            std::wstring user = JsonText(token, "user");
+            std::wstring client = JsonText(token, "client");
+            std::wstring type = refresh ? L"refresh" : L"access";
+            std::wstring expires = token["expiresAt"].is_string() ? FormatTime(JsonString(token, "expiresAt"), true) : L"never";
+            std::wstring state = token.value("revoked", false) ? L"revoked" : token.value("rotated", false) ? L"replaced"
+                                 : token.value("expired", false)                ? L"expired"
+                                                                                : L"valid";
+            LVITEMW item = {};
+            item.mask = LVIF_TEXT;
+            item.iItem = index;
+            item.pszText = user.data();
+            ListView_InsertItem(oauthTokens_, &item);
+            ListView_SetItemText(oauthTokens_, index, 1, client.data());
+            ListView_SetItemText(oauthTokens_, index, 2, type.data());
+            ListView_SetItemText(oauthTokens_, index, 3, expires.data());
+            ListView_SetItemText(oauthTokens_, index, 4, state.data());
+            index++;
+        }
+        UpdateOAuthLive();
+    }
+
+    // the controls that act on the running provider
+    void UpdateOAuthLive() {
+        bool running = oauthState_.value("running", false);
+        for (HWND control : {oauthNextLabel_, oauthNext_, oauthQueue_, oauthClear_, oauthTokens_, oauthExpire_, oauthRevoke_, oauthCopy_, oauthOpen_}) {
+            EnableWindow(control, running);
+        }
+        EnableWindow(oauthClear_, running && !oauthState_.value("decisions", json::array()).empty());
+        // nothing to expire or revoke without tokens
+        bool tokens = running && !oauthState_.value("tokens", json::array()).empty();
+        EnableWindow(oauthExpire_, tokens);
+        EnableWindow(oauthRevoke_, tokens);
+        // the tip about address-style user names, while the provider is on and no account is named like one
+        bool tip = Button_GetCheck(oauthEnabled_) == BST_CHECKED;
+        for (const User& user : users_) {
+            tip = tip && user.name.find(L'@') == std::wstring::npos;
+        }
+        bool shown = GetWindowTextLengthW(oauthUserTip_) > 0;
+        SetWindowTextW(oauthUserTip_, tip ? L"Tip: clients log in with the email of the ID token, which is the user name here. Add a test account "
+                                            L"named like alice@example.com."
+                                          : L"");
+        if (tip != shown && oauthArea_.right > oauthArea_.left) {
+            // the clients and tokens move up or down
+            LayoutOAuthTab(oauthArea_);
+        }
     }
 
     // a number field that may stay empty: its number, or null for none
@@ -991,6 +1490,7 @@ private:
         UpdateLimitNotes();
         UpdateBanner();
         UpdateClientSettings();
+        UpdateOAuthLive();
     }
 
     void Start() {
@@ -1015,6 +1515,7 @@ private:
         } else {
             SetWindowTextW(restUrl_, L"(when the REST API runs)");
         }
+        RefreshOAuth();
     }
 
     void UpdateBanner() {
@@ -1032,6 +1533,9 @@ private:
             }
             if (status_.value("restPort", 0)) {
                 bannerDetail_ += L"  ·  REST " + std::to_wstring(status_.value("restPort", 0));
+            }
+            if (status_.value("oauthPort", 0)) {
+                bannerDetail_ += L"  ·  OAuth " + std::to_wstring(status_.value("oauthPort", 0));
             }
             if (changed_) {
                 bannerTitle_ = L"Running, settings changed";
@@ -1072,6 +1576,15 @@ private:
         if (!users_.empty()) {
             text += L"\r\n\r\nUser name: " + users_[0].name + L"\r\nPassword: " + users_[0].password;
         }
+        json oauth = config.value("oauth", json::object());
+        if (oauth.value("enabled", false)) {
+            std::wstring issuer = live && status_.contains("oauthIssuer") ? JsonText(status_, "oauthIssuer")
+                                                                          : L"http://" + ClientHost(Widen(config.value("host", ""))) + L":" +
+                                                                                std::to_wstring(oauth.value("port", 0));
+            text += L"\r\n\r\nOAuth 2.0 sign-in instead of the password\r\n  Issuer: " + issuer +
+                    L"\r\n  Discovery: " + issuer + L"/.well-known/openid-configuration\r\n  Client ID: imapkit (or a client of the OAuth tab), no secret"
+                    L"\r\n  Scopes: openid email offline_access mail\r\n  PKCE S256, redirect to 127.0.0.1 or localhost on any port";
+        }
         text += L"\r\n\r\nThe certificate is self-signed for localhost, the email client has to accept it.";
         SetWindowTextW(clientSettings_, text.c_str());
     }
@@ -1092,6 +1605,17 @@ private:
     HWND smtpHint_ = nullptr, smtpRequireAuth_ = nullptr, smtpMaxSizeLabel_ = nullptr, smtpMaxSize_ = nullptr, smtpMaxSizeNote_ = nullptr;
     HWND smtpRejectGroup_ = nullptr, smtpRejectLabel_ = nullptr, smtpReject_ = nullptr, smtpRejectAdd_ = nullptr, smtpRejectRemove_ = nullptr;
     std::vector<RejectRow> rejects_;
+    HWND oauthHint_ = nullptr, oauthEnabled_ = nullptr, oauthPortLabel_ = nullptr, oauthPort_ = nullptr, oauthIssuerLabel_ = nullptr;
+    HWND oauthIssuer_ = nullptr, oauthCopy_ = nullptr, oauthOpen_ = nullptr, oauthConsentLabel_ = nullptr, oauthConsent_ = nullptr;
+    HWND oauthLifetimeLabel_ = nullptr, oauthLifetime_ = nullptr, oauthLifetimeNote_ = nullptr, oauthRefresh_ = nullptr, oauthUserTip_ = nullptr;
+    HWND oauthClientsGroup_ = nullptr, oauthClients_ = nullptr, oauthClientAdd_ = nullptr, oauthClientRemove_ = nullptr, oauthClientsNote_ = nullptr;
+    HWND oauthLiveGroup_ = nullptr, oauthNextLabel_ = nullptr, oauthNext_ = nullptr, oauthQueue_ = nullptr, oauthClear_ = nullptr;
+    HWND oauthQueued_ = nullptr, oauthTokens_ = nullptr, oauthExpire_ = nullptr, oauthRevoke_ = nullptr, oauthDocs_ = nullptr;
+    std::vector<ClientRow> clients_;
+    json oauthState_ = json::object();
+    // where the OAuth tab was laid out last, the tip relays it out when it comes or goes
+    RECT oauthArea_ = {};
+    static constexpr UINT_PTR kOAuthTimer = 1;
     std::vector<HWND> tabs_[TAB_COUNT];
 
     RECT banner_ = {};

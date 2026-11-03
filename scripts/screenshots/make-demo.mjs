@@ -150,9 +150,12 @@ const outbox = [
 ];
 
 fs.mkdirSync(dir, { recursive: true });
-// the default settings, with a rejected recipient for the SMTP tab
+// the default settings, with a rejected recipient for the SMTP tab, and the OAuth provider on with an account named
+// like an address for the OAuth tab (docs-screenshots.sh signs it in once)
 const config = Object.assign({}, DEFAULT_CONFIG, {
-    smtp: Object.assign({}, DEFAULT_CONFIG.smtp, { rejectRecipients: [{ address: '*@blocked.test', code: 550, message: 'No such user' }] })
+    users: DEFAULT_CONFIG.users.concat({ username: 'alice@example.com', password: 'wonderland' }),
+    smtp: Object.assign({}, DEFAULT_CONFIG.smtp, { rejectRecipients: [{ address: '*@blocked.test', code: 550, message: 'No such user' }] }),
+    oauth: Object.assign({}, DEFAULT_CONFIG.oauth, { enabled: true })
 });
 fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(config, null, 2) + '\n');
 fs.writeFileSync(path.join(dir, 'storage.json'), JSON.stringify(storage, null, 2) + '\n');

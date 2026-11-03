@@ -4,7 +4,7 @@
 import { EventEmitter } from 'node:events';
 import imapkit from 'imapkit';
 import { SMTPServer } from 'smtp-server';
-import { serverId, limitOptions, recipientRules } from './options.js';
+import { serverId, limitOptions, recipientRules, oauthOptions, pluginList, oauthLogText } from './options.js';
 
 // longer chunks of protocol traffic are cut in the log, a FETCH of a large message would flood it
 const TRACE_LIMIT = 8 * 1024;
@@ -80,18 +80,27 @@ export class MailServer extends EventEmitter {
         const server = imapkit({
             storage: this.snapshot(),
             users,
-            plugins: config.plugins,
+            // the OAuth provider brings the extensions that take its tokens
+            plugins: pluginList(config),
             quirks: config.quirks || [],
             script: config.script || [],
             id: serverId(config),
             ...limitOptions(config),
             tls: config.imapsPort ? { port: config.imapsPort, host: config.host } : undefined,
             // the REST API controls everything, imapkit refuses a non-loopback address without a token
-            rest: rest.enabled ? { port: rest.port, host: rest.host || '127.0.0.1', token: rest.token || undefined } : undefined
+            rest: rest.enabled ? { port: rest.port, host: rest.host || '127.0.0.1', token: rest.token || undefined } : undefined,
+            oauth: oauthOptions(config)
         });
 
         server.on('session', event => this.onImapSession(event));
         server.on('trace', ({ session, direction, data }) => this.emitTrace('imap-' + session, direction, data));
+        server.on('oauth', event => {
+            const text = oauthLogText(event);
+            if (text) {
+                this.emitTrace('oauth', 'out', text + '\r\n');
+            }
+            this.emit('oauth', event);
+        });
         server.on('mailbox', event => this.emit('store', { type: 'mailbox', path: event.path, oldPath: event.oldPath || null }));
         server.on('append', mailbox => this.emit('store', { type: 'append', path: mailbox.path }));
         server.on('expunge', mailbox => this.emit('store', { type: 'expunge', path: mailbox.path }));
@@ -130,6 +139,7 @@ export class MailServer extends EventEmitter {
                 imapPort,
                 imapsPort: this.imap.tlsServer ? this.imap.tlsServer.address().port : 0,
                 restPort: this.imap.restServer ? this.imap.restServer.address().port : 0,
+                oauthPort: this.imap.oauthServer ? this.imap.oauthServer.address().port : 0,
                 smtpPort: 0
             };
             if (config.smtpPort) {
@@ -170,14 +180,42 @@ export class MailServer extends EventEmitter {
     }
 
     /**
-     * @return {Object} `{ running, host, imapPort, imapsPort, smtpPort, restPort, restUrl }`
+     * @return {Object} `{ running, host, imapPort, imapsPort, smtpPort, restPort, restUrl, oauthPort, oauthIssuer }`
      */
     status() {
         const status = Object.assign({ running: this.running, host: this.config.host }, this.ports);
         if (this.ports.restPort) {
             status.restUrl = 'http://' + ((this.config.rest && this.config.rest.host) || '127.0.0.1') + ':' + this.ports.restPort + '/v1/';
         }
+        if (this.ports.oauthPort) {
+            status.oauthIssuer = this.imap.oauth.issuer;
+        }
         return status;
+    }
+
+    /**
+     * The OAuth provider while it runs: issuer, clients, queued decisions and the issued tokens
+     *
+     * @return {Object} `{ running, issuer, discovery, consent, clients, decisions, tokens }`
+     */
+    oauthState() {
+        if (!this.running || !this.ports.oauthPort) {
+            return { running: false, clients: [], decisions: [], tokens: [] };
+        }
+        const info = this.imap.control.getOAuthInfo();
+        return Object.assign({ running: true, tokens: this.imap.control.listOAuthTokens() }, info);
+    }
+
+    /**
+     * The control API of the running OAuth provider
+     *
+     * @return {Object} control API
+     */
+    get oauthControl() {
+        if (!this.running || !this.ports.oauthPort) {
+            throw new Error('The OAuth provider is not running, turn it on and start the server');
+        }
+        return this.imap.control;
     }
 
     emitStatus(error) {
@@ -343,6 +381,8 @@ export class MailServer extends EventEmitter {
             cert: credentials.cert,
             // without a required login, mail without one is incoming mail for INBOX
             authOptional: !settings.requireAuth,
+            // with the OAuth provider a client can log in with its access tokens
+            authMethods: this.imap.oauth ? ['PLAIN', 'LOGIN', 'XOAUTH2'] : ['PLAIN', 'LOGIN'],
             // advertised with SIZE, smtp-server refuses a larger MAIL FROM SIZE= and flags a larger message
             size: settings.maxSize > 0 ? settings.maxSize : 0,
             logger,
@@ -366,6 +406,13 @@ export class MailServer extends EventEmitter {
                 done();
             },
             onAuth: (auth, session, done) => {
+                if (auth.method === 'XOAUTH2') {
+                    // the token must be one the OAuth provider issued to this user, with its mail scope
+                    const result = this.imap.checkAccessToken(auth.accessToken || '', auth.username, 'smtp');
+                    if (result.error) {
+                        return done(null, { data: { status: '401', schemes: 'bearer', scope: this.imap.oauth.mailScope } });
+                    }
+                }
                 this.updateSmtpSession(session.id, 'login', { user: auth.username });
                 done(null, { user: auth.username });
             },

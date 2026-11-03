@@ -77,11 +77,20 @@ scp -q scripts/screenshots/demo/*.json "$WIN_HOST:$WIN_DIR_FWD/screenshot-data/"
 run_task "$APP_TASK" "$WIN_DIR\\build\\ImapKitDesktop.exe --data-dir $DATA"
 sleep 6
 
+# the first capture after the start can still show a window that had the focus, it only brings the app to the front
+shot warmup PAGE=0 >/dev/null
 shot server PAGE=0
 # the SMTP tab, the fourth of the tab control (214) on the Server page
 steps "page 0" "keys 214 39,39,39"
 shot server-smtp
-steps "page 0" "keys 214 37,37,37"
+# the OAuth tab, the fifth, after a sign-in of alice@example.com that the automatic client approves (PKCE with the
+# verifier of RFC 7636 appendix B), so the token list has rows
+OAUTH=http://127.0.0.1:8085
+CODE=$(ssh "$WIN_HOST" "curl.exe -s -o NUL -w %{redirect_url} \"$OAUTH/authorize?response_type=code&client_id=imapkit-approve&redirect_uri=http%3A%2F%2F127.0.0.1%3A5000%2Fcb&scope=openid%20email%20offline_access%20mail&state=s&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&login_hint=alice%40example.com\"" | sed -E 's/.*[?&]code=([^&]+).*/\1/')
+ssh "$WIN_HOST" "curl.exe -s -o NUL -X POST $OAUTH/token -d grant_type=authorization_code -d code=$CODE -d redirect_uri=http://127.0.0.1:5000/cb -d client_id=imapkit-approve -d code_verifier=dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+steps "page 0" "keys 214 39"
+shot server-oauth
+steps "page 0" "keys 214 37,37,37,37"
 
 # End and Up select the Northwind order, Home the reply of Maria Lopez (see make-demo.mjs)
 shot messages PAGE=2 KEYS=35,38
@@ -103,7 +112,7 @@ close_app
 ssh "$WIN_HOST" "rmdir /s /q $DATA & del $WIN_DIR\\screenshot-steps.txt & schtasks /delete /tn $TASK /f >nul & schtasks /delete /tn $APP_TASK /f >nul"
 
 mkdir -p "$OUT"
-for name in server server-smtp messages quoted client connections; do
+for name in server server-smtp server-oauth messages quoted client connections; do
     cp "$TMP/$name.png" "$OUT/$name.png"
 done
 echo "Screenshots in $OUT"

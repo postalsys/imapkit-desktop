@@ -29,7 +29,7 @@ describe('sidecar', () => {
         const hello = await sidecar.call('hello');
         assert.strictEqual(hello.status.running, false);
         const status = await sidecar.call('start', { config: Object.assign({ host: '127.0.0.1' }, ports) });
-        assert.deepStrictEqual(status, Object.assign({ running: true, host: '127.0.0.1', restPort: 0 }, ports));
+        assert.deepStrictEqual(status, Object.assign({ running: true, host: '127.0.0.1', restPort: 0, oauthPort: 0 }, ports));
         await sidecar.waitFor(event => event.event === 'status' && event.data.running);
     });
 

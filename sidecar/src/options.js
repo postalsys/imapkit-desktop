@@ -76,3 +76,116 @@ export function recipientRules(rows) {
     });
     return rules;
 }
+
+// the extensions an email client logs in with the tokens of the OAuth provider, turned on with it
+export const OAUTH_PLUGINS = ['SASL-IR', 'XOAUTH2', 'OAUTHBEARER'];
+
+/**
+ * The `oauth` option of imapkit from `config.oauth`: `{ enabled, port, consent, tokenLifetime, alwaysRefresh,
+ * clients: [{ id, name, redirectUris, consent }] }`. Rows without a client ID are skipped, a client without a
+ * consent of its own (or "default") follows the default, one without redirect URIs takes loopback URIs on any port
+ *
+ * @param {Object} config The settings
+ * @return {Object|undefined} the option, undefined when the provider is off
+ */
+export function oauthOptions(config) {
+    const oauth = config.oauth || {};
+    if (!oauth.enabled) {
+        return undefined;
+    }
+    const clients = {};
+    for (const row of oauth.clients || []) {
+        const id = String((row && row.id) || '').trim();
+        if (!id) {
+            continue;
+        }
+        const client = {};
+        const name = String(row.name || '').trim();
+        if (name) {
+            client.name = name;
+        }
+        const redirectUris = String(row.redirectUris || '')
+            .split(/[\s,]+/)
+            .filter(Boolean);
+        if (redirectUris.length) {
+            client.redirectUris = redirectUris;
+        }
+        if (row.consent && row.consent !== 'default') {
+            client.consent = row.consent;
+        }
+        clients[id] = client;
+    }
+    return {
+        port: oauth.port,
+        host: config.host,
+        consent: oauth.consent || 'prompt',
+        // no rows keeps the default clients of imapkit
+        clients: Object.keys(clients).length ? clients : undefined,
+        accessTokenTtl: oauth.tokenLifetime > 0 ? oauth.tokenLifetime : undefined,
+        // Google gives a refresh token for access_type=offline without the offline_access scope
+        refreshTokens: oauth.alwaysRefresh ? 'always' : undefined
+    };
+}
+
+/**
+ * The plugins to load: the chosen ones, and with the OAuth provider the extensions that take its tokens
+ *
+ * @param {Object} config The settings
+ * @return {String[]} plugin names
+ */
+export function pluginList(config) {
+    const plugins = (config.plugins || []).slice();
+    if (config.oauth && config.oauth.enabled) {
+        for (const name of OAUTH_PLUGINS) {
+            if (!plugins.includes(name)) {
+                plugins.push(name);
+            }
+        }
+    }
+    return plugins;
+}
+
+/**
+ * A line of the protocol log for an `oauth` event of imapkit
+ *
+ * @param {Object} event The event, `{ type, ... }`
+ * @return {String|null} the text, null for events that the log leaves out
+ */
+export function oauthLogText(event) {
+    const who = event.user ? ' for ' + event.user : '';
+    switch (event.type) {
+        case 'authorize':
+            if (event.result) {
+                return 'Sign-in request ' + (event.client ? 'from ' + event.client + ' ' : '') + 'refused: ' + (event.description || event.result);
+            }
+            return 'Sign-in request from ' + event.client + who + ': ' + event.decision + ' (' + event.source + ')';
+        case 'consent':
+            return 'Consent page answered: ' + event.decision + who;
+        case 'remember':
+            return 'Remembered "' + event.consent + '" for ' + event.client + ' until the server restarts';
+        case 'code':
+            return (
+                'Authorization code issued to ' +
+                event.client +
+                who +
+                ', scope ' +
+                event.scope +
+                (event.fault ? ', redirect broken on purpose: ' + event.fault : '')
+            );
+        case 'token':
+            return (
+                'Token request (' +
+                (event.grant || 'no grant_type') +
+                ')' +
+                (event.client ? ' from ' + event.client : '') +
+                ': ' +
+                (event.result === 'ok' ? 'tokens issued' : event.result + (event.description ? ', ' + event.description : ''))
+            );
+        case 'access':
+            return event.via.toUpperCase() + ' login with an access token' + who + ': ' + (event.result === 'ok' ? 'accepted' : 'refused, ' + event.reason);
+        case 'revoke':
+            return 'Revoked ' + event.tokens + ' token' + (event.tokens === 1 ? '' : 's') + who + ': ' + event.reason;
+        default:
+            return null;
+    }
+}

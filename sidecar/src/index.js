@@ -88,7 +88,7 @@ function saveNow() {
     }
 }
 
-for (const name of ['status', 'session', 'trace', 'store', 'log']) {
+for (const name of ['status', 'session', 'trace', 'store', 'log', 'oauth']) {
     server.on(name, data => send({ event: name, data }));
 }
 server.on('store', saveSoon);
@@ -398,6 +398,19 @@ const methods = {
         return releaseUpdate(await res.json(), VERSION);
     },
 
+    // the OAuth provider while it runs
+    oauthState: () => server.oauthState(),
+
+    // the outcome of the next sign-in, e.g. "deny", { error: "temporarily_unavailable" } or "wrong-state"
+    oauthQueue: params => server.oauthControl.queueOAuthDecision({ decision: params.decision }),
+
+    oauthClearQueue: () => server.oauthControl.clearOAuthDecisions(),
+
+    // lets the access tokens expire now (params `{ user, client, token }` choose), the next login with one fails
+    oauthExpire: params => server.oauthControl.expireOAuthTokens(params || {}),
+
+    oauthRevoke: params => server.oauthControl.revokeOAuthTokens(params || {}),
+
     clientPresets: () => clientPresets(server.config),
 
     clientConnect: params => rawClient.connect(params),
@@ -458,7 +471,12 @@ const ACTIONS = {
     importMessages: (params, result) => 'Imported ' + result.length + ' message' + (result.length === 1 ? '' : 's') + ' into ' + where(params.path),
     composeMessage: params => 'Wrote a new message into ' + where(params.path),
     importStorage: () => 'Replaced the mailboxes with an imported file',
-    reset: () => 'Reset the mailboxes to the defaults'
+    reset: () => 'Reset the mailboxes to the defaults',
+    oauthQueue: params =>
+        'Queued the outcome of the next OAuth sign-in: ' + (typeof params.decision === 'string' ? params.decision : 'error ' + params.decision.error),
+    oauthClearQueue: () => 'Cleared the queued OAuth sign-in outcomes',
+    oauthExpire: (params, result) => 'Let ' + result.expired + ' OAuth access token' + (result.expired === 1 ? '' : 's') + ' expire',
+    oauthRevoke: (params, result) => 'Revoked ' + result.revoked + ' OAuth token' + (result.revoked === 1 ? '' : 's')
 };
 
 async function handle(line) {

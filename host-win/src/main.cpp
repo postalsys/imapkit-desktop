@@ -171,11 +171,15 @@ void OnCreate(HWND hwnd) {
     TheSidecar().onEvent = [](const std::string& name, const json& data) {
         if (name == "status") {
             if (data.value("running", false)) {
-                wchar_t text[200];
-                swprintf_s(text, L"Running: IMAP %d, IMAPS %d, SMTP %d", data.value("imapPort", 0), data.value("imapsPort", 0),
+                wchar_t ports[200];
+                swprintf_s(ports, L"Running: IMAP %d, IMAPS %d, SMTP %d", data.value("imapPort", 0), data.value("imapsPort", 0),
                            data.value("smtpPort", 0));
+                std::wstring text = ports;
+                if (data.value("oauthPort", 0)) {
+                    text += L", OAuth " + std::to_wstring(data.value("oauthPort", 0));
+                }
                 SetStatus(STATUS_SERVER, text);
-                TraySetTip(std::wstring(L"ImapKit Desktop\n") + text);
+                TraySetTip(L"ImapKit Desktop\n" + text);
             } else {
                 std::wstring error = JsonText(data, "error");
                 SetStatus(STATUS_SERVER, error.empty() ? L"Stopped" : L"Stopped: " + error);

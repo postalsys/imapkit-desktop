@@ -35,7 +35,21 @@ export const DEFAULT_CONFIG = {
     limits: { appendLimit: null, quotaStorage: null, quotaMessages: null, quotaSoft: false, messageLimit: null, maxLiteralSize: null },
     // the SMTP server: a required login, the largest message in bytes (null for any) and the rejected recipients
     smtp: { requireAuth: false, maxSize: null, rejectRecipients: [] },
-    rest: { enabled: false, port: 8143, host: '127.0.0.1', token: '' }
+    rest: { enabled: false, port: 8143, host: '127.0.0.1', token: '' },
+    // the OAuth 2.0 / OpenID Connect provider of imapkit: the default consent (prompt, approve or deny), the access
+    // token lifetime in seconds, refresh tokens without offline_access (like Google), and the clients
+    oauth: {
+        enabled: false,
+        port: 8085,
+        consent: 'prompt',
+        tokenLifetime: 3600,
+        alwaysRefresh: true,
+        clients: [
+            { id: 'imapkit', name: 'ImapKit test client', redirectUris: '', consent: 'default' },
+            { id: 'imapkit-approve', name: 'ImapKit test client (always allows)', redirectUris: '', consent: 'approve' },
+            { id: 'imapkit-deny', name: 'ImapKit test client (always denies)', redirectUris: '', consent: 'deny' }
+        ]
+    }
 };
 
 const welcome = [
