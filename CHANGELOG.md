@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/postalsys/imapkit-desktop/compare/v0.3.0...v0.4.0) (2026-11-03)
+
+
+### Features
+
+* OAuth tab with the OAuth 2.0 / OpenID Connect provider of ImapKit ([8d6c60d](https://github.com/postalsys/imapkit-desktop/commit/8d6c60dd530ee342becfd02aade84aaa094011bb))
+
+
+### Bug Fixes
+
+* keep a message given to the preview before WebView2 is ready ([6fb6f64](https://github.com/postalsys/imapkit-desktop/commit/6fb6f644678b15f21d400a6712439e949a971955))
+
 ## [0.3.0](https://github.com/postalsys/imapkit-desktop/compare/v0.2.0...v0.3.0) (2026-10-22)
 
 
